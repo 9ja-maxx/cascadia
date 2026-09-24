@@ -208,13 +208,20 @@ python3 scripts/validate_topology.py
 python3 scripts/simulate_scenario.py
 ```
 
-### 5. Launch Executive Frontend
+### 5. Launch Executive Frontend Locally
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
 Open `http://localhost:5173` in your browser.
+
+### 6. Deploy to Vercel
+The repository includes pre-configured root `vercel.json` and `package.json` for zero-config Vercel deployment:
+```bash
+vercel --prod
+```
+Or import `https://github.com/9ja-maxx/cascadia` directly on [Vercel](https://vercel.com/new).
 
 ---
 

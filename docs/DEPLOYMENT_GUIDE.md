@@ -55,12 +55,40 @@ The frontend provides real-time SVG topological graph visualization, interactive
    ```
    *(Alternatively, you can paste the contract address directly into the UI header Settings modal at runtime).*
 
-### Step 2: Install Dependencies & Run
+### Step 2: Install Dependencies & Run Locally
 ```bash
+cd frontend
 npm install
 npm run dev
 ```
 Open your browser at `http://localhost:5173`.
+
+### Step 3: Deploying Frontend to Vercel
+
+The repository is configured for zero-config Vercel deployment with root and frontend `vercel.json` configurations.
+
+#### Option A: Via Vercel Web Dashboard (Recommended)
+1. Navigate to [https://vercel.com/new](https://vercel.com/new).
+2. Import your GitHub repository: `9ja-maxx/cascadia`.
+3. Vercel automatically detects the Vite configuration:
+   - **Framework Preset:** `Vite`
+   - **Root Directory:** `./` (or `frontend`)
+   - **Build Command:** `npm run build`
+   - **Output Directory:** `frontend/dist` (or `dist` if root directory is set to `frontend`)
+4. Add the following **Environment Variables**:
+   - `VITE_CASCADIA_CONTRACT_ADDRESS`: `0x037d35F587555cAdE69840e19a1e1b58C65e4f7f`
+   - `VITE_GENLAYER_CHAIN_ID`: `61999`
+   - `VITE_GENLAYER_RPC_URL`: `https://studio-dev.genlayer.com/api`
+5. Click **Deploy**.
+
+#### Option B: Via Vercel CLI
+```bash
+# Install Vercel CLI if needed
+npm install -g vercel
+
+# Deploy from repository root
+vercel --prod
+```
 
 ---
 
