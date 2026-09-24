@@ -6,6 +6,7 @@
 **Empirical Fact-Anchoring, Non-Deterministic LLM Consensus, and Topological Dependency Cascades on GenLayer**
 
 [![GenLayer Intelligent Contract](https://img.shields.io/badge/GenLayer-Intelligent%20Contract-00f0ff?style=for-the-badge&logo=ethereum)](https://genlayer.com)
+[![Studio Net Deployed](https://img.shields.io/badge/Deployed-0x037d35F...e4f7f-10b981?style=for-the-badge&logo=ethereum)](https://studio.genlayer.com)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue?style=for-the-badge&logo=python)](https://python.org)
 [![Vite + Vanilla JS](https://img.shields.io/badge/Vite-Observability%20UI-646cff?style=for-the-badge&logo=vite)](https://vitejs.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-10b981?style=for-the-badge)](LICENSE)
@@ -217,13 +218,25 @@ Open `http://localhost:5173` in your browser.
 
 ---
 
+## 🌐 Live Deployed Contract
+
+| Parameter | Value |
+| :--- | :--- |
+| **Contract Address** | `0x037d35F587555cAdE69840e19a1e1b58C65e4f7f` |
+| **Network** | GenLayer Studio Dev / StudioNet |
+| **Chain ID** | `61999` |
+| **Studio IDE** | [https://studio.genlayer.com](https://studio.genlayer.com) |
+| **Status** | Active & Initialized |
+
+---
+
 ## 🛠️ Deploying to GenLayer Studio
 
 1. Open [GenLayer Studio](https://studio.genlayer.com).
 2. Create a contract file named `cascadia.py`.
 3. Paste the code from `contracts/cascadia.py`.
-4. Deploy with your wallet address as the `admin_address` constructor argument.
-5. Copy the deployed contract address and configure in `frontend/` or through the UI settings modal.
+4. Click **Deploy Contract**.
+5. The deployed contract address is ready for interaction via the frontend or CLI.
 
 ---
 

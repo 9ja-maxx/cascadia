@@ -30,13 +30,13 @@ GenLayer Intelligent Contracts execute non-deterministic consensus algorithms us
 
 ### Step 3: Compile & Deploy
 1. Click the **Deploy** tab in GenLayer Studio.
-2. In the constructor arguments, supply the protocol administrator's address:
-   ```json
-   ["0xYourAdminWalletAddress..."]
-   ```
+2. The constructor arguments default to empty (`[]`).
 3. Click **Deploy Contract**.
 4. Confirm the transaction in your connected wallet.
-5. Once confirmed, copy the resulting **Contract Address** (e.g. `0x1a2B...`).
+5. The contract is deployed to Studio Dev / StudioNet:
+   - **Live Contract Address:** `0x037d35F587555cAdE69840e19a1e1b58C65e4f7f`
+   - **Target Network:** GenLayer Studio Dev (Chain ID: `61999`)
+   - **Explorer / Verification:** Verified via GenLayer Studio
 
 ---
 
