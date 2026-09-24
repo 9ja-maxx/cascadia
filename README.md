@@ -138,7 +138,7 @@ The CASCADIA frontend is engineered for compliance officers, risk managers, and 
 - **Dark Obsidian Aesthetics:** Styled according to high-density executive telemetry design principles (`#080a0d` obsidian surface, cyan truth glows, emerald valid signals, and amber staleness indicators).
 - **Interactive SVG DAG Canvas:** Smooth cubic bezier curves connecting layered nodes with real-time coordinate computation.
 - **Node Detail Telemetry Drawer:** Deep-dive modal revealing definition fingerprints, content digests, depth, epochs, and dependency trees.
-- **Simulated Mutation Engine:** One-click simulation enabling judges and reviewers to trigger synthetic mutations and watch staleness cascades ripple through the DAG in real time.
+- **100% Live On-Chain Telemetry:** Direct inspection and invocation of active anchors and verdicts against the GenLayer Studio Dev network with zero mock data or synthetic fallbacks.
 - **Web3 Wallet Client:** Built with `genlayer-js` supporting EIP-1193 wallet connection and direct interaction with GenLayer Studio Dev / StudioNet.
 
 ---
@@ -162,16 +162,15 @@ cascadia/
 │   ├── vercel.json              # Zero-config deployment manifest
 │   ├── src/
 │   │   ├── styles.css           # Obsidian theme and responsive token system
-│   │   ├── topology.js          # SVG layout math & cascade simulation engine
+│   │   ├── topology.js          # SVG layout math & graph edge engine
 │   │   └── main.js              # Telemetry dashboard & Web3 wallet client
 │   └── test/
-│       └── topology.test.js     # Node.js unit tests for layout and cascade logic
+│       └── topology.test.js     # Node.js unit tests for layout math
 ├── scripts/
 │   ├── validate_topology.py     # Independent DAG acyclicity and bound verifier
-│   ├── deploy_cascadia.py       # Contract deployment and RPC manifest utility
-│   └── simulate_scenario.py     # End-to-end interactive mutation scenario runner
+│   └── deploy_cascadia.py       # Contract deployment and RPC manifest utility
 ├── tests/
-│   ├── conftest.py              # Test harness and GenLayer calldata mocks
+│   ├── conftest.py              # Test harness and GenLayer calldata test fixtures
 │   └── test_cascadia.py         # Pytest suite covering all contract invariants
 ├── pyproject.toml               # Python project configuration
 ├── requirements.txt             # Testing dependencies (pytest, etc.)
@@ -192,7 +191,7 @@ pip install -r requirements.txt
 pytest -v tests/
 ```
 
-### 2. Verify Frontend Topological Layout & Cascade Math
+### 2. Verify Frontend Topological Layout & Edge Math
 ```bash
 cd frontend
 node --test test/topology.test.js
@@ -203,12 +202,7 @@ node --test test/topology.test.js
 python3 scripts/validate_topology.py
 ```
 
-### 4. Run Interactive End-to-End Simulation
-```bash
-python3 scripts/simulate_scenario.py
-```
-
-### 5. Launch Executive Frontend Locally
+### 4. Launch Executive Frontend Locally
 ```bash
 cd frontend
 npm install

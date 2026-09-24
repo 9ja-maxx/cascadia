@@ -42,7 +42,7 @@ GenLayer Intelligent Contracts execute non-deterministic consensus algorithms us
 
 ## 3. Configuring the Executive Observability Frontend
 
-The frontend provides real-time SVG topological graph visualization, interactive node inspection, simulated cascades, and direct on-chain transaction execution.
+The frontend provides real-time SVG topological graph visualization, interactive node inspection, and direct on-chain transaction execution against GenLayer Studio Dev.
 
 ### Step 1: Configure Environment
 1. Navigate to the `frontend/` directory:
@@ -130,7 +130,7 @@ To run the local contract test suite:
 pytest -v tests/
 ```
 
-To run the frontend topology layout and cascade simulation tests:
+To run the frontend topology layout tests:
 ```bash
 cd frontend && node --test test/topology.test.js
 ```
@@ -140,7 +140,3 @@ To run topological acyclicity validation:
 python3 scripts/validate_topology.py
 ```
 
-To run the end-to-end interactive scenario simulation:
-```bash
-python3 scripts/simulate_scenario.py
-```

@@ -37,9 +37,6 @@ jobs:
         run: |
           python3 scripts/validate_topology.py
 
-      - name: Run Scenario Simulation
-        run: |
-          python3 scripts/simulate_scenario.py
 
       - name: Run Pytest Test Suite
         run: |
