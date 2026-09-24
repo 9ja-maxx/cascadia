@@ -1,8 +1,10 @@
 /**
- * CASCADIA PROTOCOL — Topological Layout & Cascade Simulation Engine
+ * CASCADIA PROTOCOL — Topological Layout & Graph Visualization Engine
  */
 
 export function calculateNodePositions(nodes, canvasWidth = 1000, canvasHeight = 440) {
+  if (!nodes || nodes.length === 0) return new Map();
+
   // Group nodes by depth
   const layers = new Map();
   nodes.forEach((node) => {
@@ -41,44 +43,19 @@ export function generateBezierPath(startX, startY, endX, endY) {
   return `M ${startX} ${startY} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${endX} ${endY}`;
 }
 
-export function simulateCascade(nodes, edges, targetAnchorId) {
-  // Clone nodes
-  const updatedNodes = nodes.map((n) => ({ ...n }));
-  const nodeMap = new Map(updatedNodes.map((n) => [n.id, n]));
+export function buildGraphEdges(nodes) {
+  const edges = [];
+  if (!Array.isArray(nodes)) return edges;
 
-  const target = nodeMap.get(targetAnchorId);
-  if (!target) return updatedNodes;
-
-  target.status = "ANCHOR_MUTATED";
-
-  // Build reverse adjacency list: parent -> [children]
-  const reverseAdj = new Map();
-  edges.forEach(([parent, child]) => {
-    if (!reverseAdj.has(parent)) reverseAdj.set(parent, []);
-    reverseAdj.get(parent).push(child);
+  nodes.forEach((node) => {
+    if (node.kind === "VERDICT" && Array.isArray(node.dependencies)) {
+      node.dependencies.forEach((depId) => {
+        edges.push([depId, node.id]);
+      });
+    }
   });
 
-  // Breadth-first staleness cascade
-  const queue = [targetAnchorId];
-  const visited = new Set();
-
-  while (queue.length > 0) {
-    const curr = queue.shift();
-    if (visited.has(curr)) continue;
-    visited.add(curr);
-
-    const dependents = reverseAdj.get(curr) || [];
-    dependents.forEach((depId) => {
-      const depNode = nodeMap.get(depId);
-      if (depNode && depNode.kind === "VERDICT") {
-        depNode.status = "VERDICT_STALE";
-        depNode.effective_status = "VERDICT_STALE";
-      }
-      queue.push(depId);
-    });
-  }
-
-  return updatedNodes;
+  return edges;
 }
 
 export function computeTopologyStats(nodes) {
@@ -88,20 +65,22 @@ export function computeTopologyStats(nodes) {
   let validVerdicts = 0;
   let staleCount = 0;
 
-  nodes.forEach((n) => {
-    if (n.kind === "ANCHOR") {
-      anchors++;
-      if (n.status === "ANCHOR_ACTIVE") activeAnchors++;
-      if (n.status === "ANCHOR_MUTATED" || n.status === "ANCHOR_DEGRADED") staleCount++;
-    } else {
-      verdicts++;
-      if (n.status === "VERDICT_VALID") validVerdicts++;
-      if (n.status === "VERDICT_STALE" || n.status === "VERDICT_INITIAL_STALE") staleCount++;
-    }
-  });
+  if (Array.isArray(nodes)) {
+    nodes.forEach((n) => {
+      if (n.kind === "ANCHOR") {
+        anchors++;
+        if (n.status === "ANCHOR_ACTIVE") activeAnchors++;
+        if (n.status === "ANCHOR_MUTATED" || n.status === "ANCHOR_DEGRADED") staleCount++;
+      } else {
+        verdicts++;
+        if (n.status === "VERDICT_VALID") validVerdicts++;
+        if (n.status === "VERDICT_STALE" || n.status === "VERDICT_INITIAL_STALE") staleCount++;
+      }
+    });
+  }
 
   return {
-    totalNodes: nodes.length,
+    totalNodes: nodes?.length || 0,
     anchors,
     activeAnchors,
     verdicts,

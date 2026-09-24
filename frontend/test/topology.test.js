@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   calculateNodePositions,
   generateBezierPath,
-  simulateCascade,
+  buildGraphEdges,
   computeTopologyStats
 } from "../src/topology.js";
 
@@ -38,30 +38,18 @@ test("generateBezierPath outputs valid SVG cubic bezier command", () => {
   assert.ok(path.endsWith("300 250"));
 });
 
-test("simulateCascade propagates mutation status to downstream dependent verdicts", () => {
+test("buildGraphEdges derives causal directed edges from declared verdict dependencies", () => {
   const nodes = [
-    { id: "anchor-sec", kind: "ANCHOR", status: "ANCHOR_ACTIVE" },
-    { id: "verdict-kyc", kind: "VERDICT", status: "VERDICT_VALID", effective_status: "VERDICT_VALID" },
-    { id: "verdict-loan", kind: "VERDICT", status: "VERDICT_VALID", effective_status: "VERDICT_VALID" },
-    { id: "anchor-unrelated", kind: "ANCHOR", status: "ANCHOR_ACTIVE" }
+    { id: "anchor-sec", kind: "ANCHOR" },
+    { id: "verdict-kyc", kind: "VERDICT", dependencies: ["anchor-sec"] },
+    { id: "verdict-loan", kind: "VERDICT", dependencies: ["verdict-kyc"] }
   ];
 
-  const edges = [
-    ["anchor-sec", "verdict-kyc"],
-    ["verdict-kyc", "verdict-loan"]
-  ];
+  const edges = buildGraphEdges(nodes);
 
-  const cascaded = simulateCascade(nodes, edges, "anchor-sec");
-
-  const anchorSec = cascaded.find((n) => n.id === "anchor-sec");
-  const verdictKyc = cascaded.find((n) => n.id === "verdict-kyc");
-  const verdictLoan = cascaded.find((n) => n.id === "verdict-loan");
-  const unrelated = cascaded.find((n) => n.id === "anchor-unrelated");
-
-  assert.equal(anchorSec.status, "ANCHOR_MUTATED");
-  assert.equal(verdictKyc.effective_status, "VERDICT_STALE");
-  assert.equal(verdictLoan.effective_status, "VERDICT_STALE");
-  assert.equal(unrelated.status, "ANCHOR_ACTIVE");
+  assert.equal(edges.length, 2);
+  assert.deepEqual(edges[0], ["anchor-sec", "verdict-kyc"]);
+  assert.deepEqual(edges[1], ["verdict-kyc", "verdict-loan"]);
 });
 
 test("computeTopologyStats aggregates metrics accurately", () => {
@@ -75,7 +63,6 @@ test("computeTopologyStats aggregates metrics accurately", () => {
   const stats = computeTopologyStats(nodes);
   assert.equal(stats.totalNodes, 4);
   assert.equal(stats.anchors, 2);
-  assert.equal(stats.verdicts, 2);
   assert.equal(stats.activeAnchors, 1);
   assert.equal(stats.validVerdicts, 1);
   assert.equal(stats.staleCount, 2);

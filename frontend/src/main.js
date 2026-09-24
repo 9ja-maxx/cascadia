@@ -1,14 +1,20 @@
 /**
  * CASCADIA PROTOCOL — Executive Observability Client
- * Wired for GenLayer Studio Dev & EIP-1193 Wallets
+ * 100% Live On-Chain Synchronization with GenLayer Intelligent Contracts
+ * Zero Mock Data • Zero Simulated Fallbacks
  */
 
 import { createClient, isSuccessful } from "genlayer-js";
 import { studioDevnet } from "genlayer-js/chains";
 import { TransactionHashVariant } from "genlayer-js/types";
-import { calculateNodePositions, generateBezierPath, simulateCascade, computeTopologyStats } from "./topology.js";
+import {
+  calculateNodePositions,
+  generateBezierPath,
+  buildGraphEdges,
+  computeTopologyStats
+} from "./topology.js";
 
-// Configurable deployment parameters (updated once deployed on Studio Dev / StudioNet)
+// Configurable deployment parameters wired to deployed contract
 const CONFIG = {
   contractAddress: localStorage.getItem("cascadia_contract") || "0x037d35F587555cAdE69840e19a1e1b58C65e4f7f",
   networkName: "GenLayer Studio Dev",
@@ -18,62 +24,40 @@ const CONFIG = {
 const readClient = createClient({ chain: studioDevnet });
 let writeClient = null;
 let userWallet = "";
-let selectedNodeId = "anchor-compliance-soc2";
-let isSimulatingMutation = false;
+let selectedNodeId = null;
+let isSyncing = false;
 let activeModal = null;
+let actionFeedback = "";
+let effectiveStatusResult = null;
 
-// Initial verified topology fixture
-let topologyNodes = [
-  {
-    id: "anchor-compliance-soc2",
-    kind: "ANCHOR",
-    title: "SOC 2 Compliance Charter",
-    hypothesis: "Acme Corp maintains active SOC 2 Type II compliance.",
-    uri: "https://registry.example.org/compliance-charter",
-    status: "ANCHOR_ACTIVE",
-    epoch: 0,
-    depth: 0,
-    content_digest: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    definition_fingerprint: "d9f8b4...7a21"
-  },
-  {
-    id: "verdict-vendor-qualification",
-    kind: "VERDICT",
-    title: "Vendor Qualification Approval",
-    inquiry: "Should Acme Corp remain approved for Tier-1 enterprise vendor procurement?",
-    dependencies: ["anchor-compliance-soc2"],
-    status: "VERDICT_VALID",
-    effective_status: "VERDICT_VALID",
-    epoch: 1,
-    depth: 1,
-    definition_fingerprint: "c4a1e9...8b34"
-  },
-  {
-    id: "verdict-automated-disbursement",
-    kind: "VERDICT",
-    title: "Treasury Disbursement Authorization",
-    inquiry: "Are procurement disbursements authorized while vendor qualification remains valid?",
-    dependencies: ["verdict-vendor-qualification"],
-    status: "VERDICT_VALID",
-    effective_status: "VERDICT_VALID",
-    epoch: 1,
-    depth: 2,
-    definition_fingerprint: "f2c8d1...5e99"
+// 100% Live On-Chain State (Empty by default until synced from blockchain)
+let topologyNodes = [];
+let topologyEdges = [];
+
+// Node ID tracking across transactions for this deployed contract
+function getKnownNodeIds() {
+  try {
+    const raw = localStorage.getItem(`cascadia_nodes_${CONFIG.contractAddress}`);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
   }
-];
+}
 
-let topologyEdges = [
-  ["anchor-compliance-soc2", "verdict-vendor-qualification"],
-  ["verdict-vendor-qualification", "verdict-automated-disbursement"]
-];
+function rememberNodeId(id) {
+  const ids = getKnownNodeIds();
+  if (!ids.includes(id)) {
+    ids.push(id);
+    localStorage.setItem(`cascadia_nodes_${CONFIG.contractAddress}`, JSON.stringify(ids));
+  }
+}
 
 // -----------------------------------------------------------------------------
-// Core Contract Communication
+// Core On-Chain Contract Communication
 // -----------------------------------------------------------------------------
 
 async function executeRead(method, args = []) {
-  if (CONFIG.contractAddress === "0x0000000000000000000000000000000000000000") {
-    console.warn("Contract address not yet set. Operating in local fixture / verification mode.");
+  if (!CONFIG.contractAddress || CONFIG.contractAddress === "0x0000000000000000000000000000000000000000") {
     return null;
   }
   try {
@@ -93,12 +77,18 @@ async function executeRead(method, args = []) {
 
 async function executeWrite(method, args) {
   if (!writeClient) await connectWallet();
+  actionFeedback = `Submitting on-chain transaction: ${method}...`;
+  renderApp();
+
   const txHash = await writeClient.writeContract({
     address: CONFIG.contractAddress,
     functionName: method,
     args,
     value: BigInt(0)
   });
+
+  actionFeedback = `Transaction broadcast (${txHash.slice(0, 10)}…). Awaiting validator consensus...`;
+  renderApp();
 
   const receipt = await readClient.waitForTransactionReceipt({
     hash: txHash,
@@ -107,9 +97,10 @@ async function executeWrite(method, args) {
   });
 
   if (!isSuccessful(receipt)) {
-    throw new Error(`Transaction failed: ${receipt?.statusName || "REVERTED"}`);
+    throw new Error(`Transaction reverted: ${receipt?.statusName || "CONSENSUS_REVERTED"}`);
   }
 
+  actionFeedback = `Transaction confirmed on-chain! Synced.`;
   await refreshOnChainState();
   return txHash;
 }
@@ -118,52 +109,105 @@ async function connectWallet() {
   if (!window.ethereum) throw new Error("No EIP-1193 browser wallet detected.");
   const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
   if (!accounts?.[0]) throw new Error("No account authorized.");
-  userWallet = accounts[0];
+  userWallet = accounts[0].toLowerCase();
   writeClient = createClient({
     chain: studioDevnet,
     account: userWallet,
     provider: window.ethereum
   });
-  renderApp();
+  await refreshOnChainState();
 }
 
 async function refreshOnChainState() {
-  // Sync creator indices if wallet is connected
-  if (userWallet && CONFIG.contractAddress !== "0x0000000000000000000000000000000000000000") {
-    const anchorIds = await executeRead("get_curator_anchors", [userWallet]) || [];
-    const verdictIds = await executeRead("get_curator_verdicts", [userWallet]) || [];
+  isSyncing = true;
+  renderApp();
 
-    for (const id of anchorIds) {
-      const data = await executeRead("get_anchor", [id]);
-      if (data && !topologyNodes.some((n) => n.id === id)) {
-        topologyNodes.push({
-          id: data.anchor_id,
-          kind: "ANCHOR",
-          title: data.anchor_id,
-          hypothesis: data.tracked_hypothesis,
-          uri: data.uri,
-          status: data.status,
-          epoch: data.epoch,
-          depth: 0
-        });
-      }
+  const knownIds = new Set(getKnownNodeIds());
+
+  // Query curator indexes if wallet is connected
+  if (userWallet && CONFIG.contractAddress) {
+    try {
+      const userAnchors = await executeRead("get_curator_anchors", [userWallet]) || [];
+      const userVerdicts = await executeRead("get_curator_verdicts", [userWallet]) || [];
+      userAnchors.forEach((id) => { knownIds.add(id); rememberNodeId(id); });
+      userVerdicts.forEach((id) => { knownIds.add(id); rememberNodeId(id); });
+    } catch (e) {
+      console.warn("Could not query curator index:", e);
     }
   }
+
+  const loadedNodes = [];
+
+  for (const id of Array.from(knownIds)) {
+    try {
+      // Try loading as anchor first
+      const anchorData = await executeRead("get_anchor", [id]);
+      if (anchorData && anchorData.anchor_id) {
+        loadedNodes.push({
+          id: anchorData.anchor_id,
+          kind: "ANCHOR",
+          title: anchorData.anchor_id,
+          hypothesis: anchorData.tracked_hypothesis,
+          uri: anchorData.uri,
+          status: anchorData.status,
+          epoch: anchorData.epoch,
+          depth: 0,
+          custodian: anchorData.custodian,
+          content_digest: anchorData.content_digest,
+          semantic_snapshot: anchorData.semantic_snapshot,
+          definition_fingerprint: anchorData.definition_fingerprint,
+          epoch_fingerprint: anchorData.epoch_fingerprint
+        });
+        continue;
+      }
+    } catch {
+      // Not an anchor
+    }
+
+    try {
+      // Try loading as verdict
+      const verdictData = await executeRead("get_verdict", [id]);
+      if (verdictData && verdictData.verdict_id) {
+        loadedNodes.push({
+          id: verdictData.verdict_id,
+          kind: "VERDICT",
+          title: verdictData.verdict_id,
+          inquiry: verdictData.inquiry,
+          dependencies: verdictData.dependencies || [],
+          status: verdictData.status,
+          effective_status: verdictData.effective_status,
+          epoch: verdictData.epoch,
+          depth: verdictData.topology_depth || 1,
+          curator: verdictData.curator,
+          adjudication: verdictData.adjudication,
+          definition_fingerprint: verdictData.definition_fingerprint,
+          epoch_fingerprint: verdictData.epoch_fingerprint
+        });
+      }
+    } catch {
+      // Not a verdict
+    }
+  }
+
+  topologyNodes = loadedNodes;
+  topologyEdges = buildGraphEdges(topologyNodes);
+
+  if (topologyNodes.length > 0 && (!selectedNodeId || !topologyNodes.some((n) => n.id === selectedNodeId))) {
+    selectedNodeId = topologyNodes[0].id;
+  }
+
+  isSyncing = false;
   renderApp();
 }
 
 // -----------------------------------------------------------------------------
-// UI Rendering Engine
+// UI Rendering Engine (100% Real On-Chain)
 // -----------------------------------------------------------------------------
 
 function renderApp() {
   const appEl = document.getElementById("app");
-  const displayNodes = isSimulatingMutation 
-    ? simulateCascade(topologyNodes, topologyEdges, "anchor-compliance-soc2")
-    : topologyNodes;
-
-  const stats = computeTopologyStats(displayNodes);
-  const selectedNode = displayNodes.find((n) => n.id === selectedNodeId) || displayNodes[0];
+  const stats = computeTopologyStats(topologyNodes);
+  const selectedNode = topologyNodes.find((n) => n.id === selectedNodeId) || null;
 
   appEl.innerHTML = `
     <!-- Top Navigation -->
@@ -181,8 +225,8 @@ function renderApp() {
 
       <nav class="nav-links">
         <a class="nav-item active" href="#">Topological Graph</a>
-        <a class="nav-item" href="#anchors">Anchors</a>
-        <a class="nav-item" href="#verdicts">Verdicts</a>
+        <a class="nav-item" href="#anchors">Anchors (${stats.anchors})</a>
+        <a class="nav-item" href="#verdicts">Verdicts (${stats.verdicts})</a>
       </nav>
 
       <div class="nav-cta-cluster">
@@ -199,16 +243,16 @@ function renderApp() {
       <div class="dashboard-title-row">
         <div class="dashboard-heading">
           <h1>Causal Truth Mesh</h1>
-          <p>Autonomous monitoring of real-world facts with deterministic reverse-edge staleness propagation.</p>
+          <p>Autonomous monitoring of real-world facts with deterministic reverse-edge staleness cascades on GenLayer.</p>
         </div>
       </div>
 
       <!-- Live Telemetry Stats -->
       <div class="stats-grid">
         <div class="stat-card cyan">
-          <div class="stat-label">Total Topology Nodes</div>
+          <div class="stat-label">Total On-Chain Nodes</div>
           <div class="stat-value">${stats.totalNodes}</div>
-          <div class="stat-desc">Declared anchors & verdicts</div>
+          <div class="stat-desc">Live on GenLayer contract</div>
         </div>
         <div class="stat-card emerald">
           <div class="stat-label">Active Truth Anchors</div>
@@ -218,27 +262,30 @@ function renderApp() {
         <div class="stat-card emerald">
           <div class="stat-label">Affirmed Verdicts</div>
           <div class="stat-value">${stats.validVerdicts}</div>
-          <div class="stat-desc">Unbroken causal integrity</div>
+          <div class="stat-desc">Consensus verified decisions</div>
         </div>
         <div class="stat-card amber">
           <div class="stat-label">Cascaded Staleness</div>
           <div class="stat-value">${stats.staleCount}</div>
-          <div class="stat-desc">Awaiting re-adjudication</div>
+          <div class="stat-desc">Invalidated by upstream shifts</div>
         </div>
       </div>
     </section>
 
     <!-- Topological Canvas Area -->
     <main class="topology-container">
-      <!-- Interactive Simulation Bar -->
-      <div class="simulation-bar">
-        <div class="sim-info">
-          <span class="sim-badge">INTERACTIVE REVIEWER MODE</span>
-          <span>Simulate real-world fact mutation to observe deterministic reverse-edge staleness cascades in real time.</span>
+      <!-- Live Contract Status Bar (Zero Mock Data) -->
+      <div class="live-contract-bar">
+        <div class="contract-info">
+          <span class="live-badge">LIVE ON-CHAIN</span>
+          <span class="contract-address">Contract: <code>${CONFIG.contractAddress}</code></span>
+          ${isSyncing ? `<span style="color: var(--cyan-bright); font-size: 0.8rem;">⟳ Syncing blockchain state...</span>` : ""}
+          ${actionFeedback ? `<span style="color: var(--emerald); font-size: 0.8rem; font-weight: 500;">${actionFeedback}</span>` : ""}
         </div>
-        <button class="btn btn-secondary" id="btn-toggle-sim">
-          ${isSimulatingMutation ? "Reset Simulation" : "Simulate Fact Mutation (Zero Gas)"}
-        </button>
+        <div class="contract-actions">
+          <button class="btn btn-secondary btn-sm" id="btn-refresh-chain">⟳ Refresh State</button>
+          <button class="btn btn-secondary btn-sm" id="btn-config-contract">Settings</button>
+        </div>
       </div>
 
       <div class="canvas-wrapper">
@@ -251,8 +298,10 @@ function renderApp() {
         </div>
 
         <div class="dag-canvas" id="dag-canvas">
-          ${renderTopologySVG(displayNodes, topologyEdges)}
-          ${renderTopologyNodeCards(displayNodes)}
+          ${topologyNodes.length === 0 ? renderEmptyState() : `
+            ${renderTopologySVG(topologyNodes, topologyEdges)}
+            ${renderTopologyNodeCards(topologyNodes)}
+          `}
         </div>
       </div>
     </main>
@@ -266,11 +315,25 @@ function renderApp() {
     ${renderModals()}
 
     <footer class="footer">
-      <span>CASCADIA PROTOCOL • DEPLOYED ON GENLAYER STUDIO DEV (CHAIN ID 61999)</span>
+      <span>CASCADIA PROTOCOL • DEPLOYED AT ${CONFIG.contractAddress} • GENLAYER STUDIO DEV (CHAIN ID 61999)</span>
     </footer>
   `;
 
   bindEvents();
+}
+
+function renderEmptyState() {
+  return `
+    <div class="empty-state-card">
+      <div class="empty-state-icon">⚡</div>
+      <h3>No On-Chain Nodes Registered Yet</h3>
+      <p>Contract <code>${CONFIG.contractAddress}</code> is deployed and active on GenLayer Studio Dev. Register your first empirical anchor to establish real on-chain ground truth.</p>
+      <div class="empty-state-actions">
+        <button class="btn btn-primary" id="btn-empty-anchor">+ Register First Anchor</button>
+        ${!userWallet ? `<button class="btn btn-secondary" id="btn-empty-wallet">Connect Wallet</button>` : ""}
+      </div>
+    </div>
+  `;
 }
 
 function renderTopologySVG(nodes, edges) {
@@ -317,151 +380,251 @@ function renderTopologyNodeCards(nodes) {
 }
 
 function renderTelemetryDrawer(node) {
-  if (!node) return `<div class="drawer-header"><div class="drawer-title">Select a Node</div></div>`;
+  if (!node) {
+    return `
+      <div class="drawer-header">
+        <div class="drawer-title">Node Telemetry</div>
+      </div>
+      <div class="drawer-body">
+        <p style="color: var(--text-secondary); font-size: 0.9rem;">Select any node from the DAG to view on-chain proofs and trigger validator actions.</p>
+      </div>
+    `;
+  }
 
   const isAnchor = node.kind === "ANCHOR";
+
   return `
     <div class="drawer-header">
       <div class="drawer-title">${node.title || node.id}</div>
-      <button class="close-btn" id="btn-close-drawer">&times;</button>
+      <button class="drawer-close" id="btn-close-drawer">✕</button>
     </div>
 
-    <div class="drawer-field">
-      <label>Node Kind & Status</label>
-      <div class="val">${node.kind} — ${node.status}</div>
-    </div>
-
-    <div class="drawer-field">
-      <label>${isAnchor ? 'Tracked Hypothesis' : 'Decision Inquiry'}</label>
-      <div class="val">${node.hypothesis || node.inquiry || "—"}</div>
-    </div>
-
-    ${isAnchor ? `
-      <div class="drawer-field">
-        <label>Empirical URI</label>
-        <div class="val"><a href="${node.uri}" target="_blank" style="color: var(--cyan-bright); text-decoration: none;">${node.uri}</a></div>
+    <div class="drawer-body">
+      <div class="detail-block">
+        <div class="detail-label">NODE IDENTIFIER</div>
+        <div class="detail-value">${node.id}</div>
       </div>
-      <div class="drawer-field">
-        <label>Last Content SHA-256 Digest</label>
-        <div class="val">${node.content_digest || "Awaiting Initial Audit"}</div>
-      </div>
-    ` : `
-      <div class="drawer-field">
-        <label>Upstream Dependencies</label>
-        <div class="val">${(node.dependencies || []).join(", ") || "None"}</div>
-      </div>
-      <div class="drawer-field">
-        <label>Effective Verdict Status</label>
-        <div class="val">${node.effective_status || node.status}</div>
-      </div>
-    `}
 
-    <div class="drawer-field">
-      <label>Definition Fingerprint</label>
-      <div class="val">${node.definition_fingerprint || "CASCADIA-PINNED"}</div>
-    </div>
+      <div class="detail-block">
+        <div class="detail-label">NODE CLASSIFICATION</div>
+        <div class="detail-value"><span class="node-kind">${node.kind}</span> (Depth ${node.depth})</div>
+      </div>
 
-    <div class="drawer-actions">
+      <div class="detail-block">
+        <div class="detail-label">ON-CHAIN STATUS</div>
+        <div class="detail-value">
+          <span class="status-pill ${node.status?.toLowerCase().replace("anchor_", "").replace("verdict_", "")}">
+            ${node.status}
+          </span>
+        </div>
+      </div>
+
       ${isAnchor ? `
-        <button class="btn btn-primary" id="btn-audit-anchor" data-id="${node.id}">Audit Anchor via GenLayer</button>
+        <div class="detail-block">
+          <div class="detail-label">OBSERVED HTTPS ENDPOINT</div>
+          <div class="detail-value" style="font-family: var(--font-mono); font-size: 0.78rem; word-break: break-all;">
+            <a href="${node.uri}" target="_blank" rel="noopener" style="color: var(--cyan-bright);">${node.uri}</a>
+          </div>
+        </div>
+
+        <div class="detail-block">
+          <div class="detail-label">TRACKED FACTUAL HYPOTHESIS</div>
+          <div class="detail-value">${node.hypothesis}</div>
+        </div>
+
+        <div class="detail-block">
+          <div class="detail-label">CONTENT DIGEST (SHA-256)</div>
+          <div class="detail-value" style="font-family: var(--font-mono); font-size: 0.75rem; word-break: break-all;">
+            ${node.content_digest || "Pending first audit on-chain"}
+          </div>
+        </div>
       ` : `
-        <button class="btn btn-primary" id="btn-adjudicate-verdict" data-id="${node.id}">Adjudicate Verdict</button>
+        <div class="detail-block">
+          <div class="detail-label">REASONED INQUIRY</div>
+          <div class="detail-value">${node.inquiry}</div>
+        </div>
+
+        <div class="detail-block">
+          <div class="detail-label">DECLARED UPSTREAM DEPENDENCIES</div>
+          <div class="detail-value">
+            ${node.dependencies?.length ? node.dependencies.map((d) => `<span class="dep-pill">${d}</span>`).join(" ") : "None"}
+          </div>
+        </div>
+
+        <div class="detail-block">
+          <div class="detail-label">EFFECTIVE RECURSIVE STATUS</div>
+          <div class="detail-value">
+            <span class="status-pill">${node.effective_status || node.status}</span>
+          </div>
+        </div>
       `}
+
+      <div class="detail-block">
+        <div class="detail-label">DEFINITION FINGERPRINT</div>
+        <div class="detail-value" style="font-family: var(--font-mono); font-size: 0.75rem; word-break: break-all;">
+          ${node.definition_fingerprint || "—"}
+        </div>
+      </div>
+
+      ${effectiveStatusResult ? `
+        <div class="detail-block" style="background: rgba(0,240,255,0.06); padding: 0.75rem; border-radius: 6px;">
+          <div class="detail-label">ON-CHAIN VERIFICATION RESULT</div>
+          <div class="detail-value" style="color: var(--cyan-bright); font-weight: 600;">
+            ${effectiveStatusResult}
+          </div>
+        </div>
+      ` : ""}
+
+      <!-- Real On-Chain Action Operations -->
+      <div class="drawer-actions">
+        ${isAnchor ? `
+          <button class="btn btn-primary" id="btn-audit-anchor" style="width: 100%; margin-bottom: 0.5rem;">
+            ⚡ Run On-Chain Web Observation (Audit)
+          </button>
+        ` : `
+          <button class="btn btn-primary" id="btn-adjudicate-verdict" style="width: 100%; margin-bottom: 0.5rem;">
+            ⚡ Run On-Chain LLM Consensus (Adjudicate)
+          </button>
+          <button class="btn btn-secondary" id="btn-verify-effective" style="width: 100%; margin-bottom: 0.5rem;">
+            🔍 Check Recursive Health (Zero Gas)
+          </button>
+        `}
+      </div>
     </div>
   `;
 }
 
 function renderModals() {
-  return `
-    <!-- Anchor Creation Modal -->
-    <div class="modal-backdrop ${activeModal === 'anchor' ? 'open' : ''}" id="modal-anchor">
-      <div class="modal-dialog">
-        <div class="modal-header">
-          <div class="modal-title">Anchor Ground Truth</div>
-          <div class="modal-desc">Register a public HTTPS fact source to monitor for material mutations.</div>
-        </div>
-        <form id="form-anchor">
-          <div class="form-group">
-            <label>Anchor Identifier</label>
-            <input class="form-control" name="anchor_id" required value="anchor-source-${Date.now()}" />
-          </div>
-          <div class="form-group">
-            <label>Public HTTPS URI</label>
-            <input class="form-control" name="uri" type="url" required placeholder="https://example.org/compliance-data" />
-          </div>
-          <div class="form-group">
-            <label>Tracked Empirical Hypothesis</label>
-            <textarea class="form-control" name="hypothesis" rows="3" required placeholder="Organization maintains active compliance accreditation."></textarea>
-          </div>
-          <div class="form-actions">
-            <button class="btn btn-secondary" type="button" data-close-modal>Cancel</button>
-            <button class="btn btn-primary" type="submit">Register Anchor</button>
-          </div>
-        </form>
-      </div>
-    </div>
+  if (!activeModal) return "";
 
-    <!-- Verdict Creation Modal -->
-    <div class="modal-backdrop ${activeModal === 'verdict' ? 'open' : ''}" id="modal-verdict">
-      <div class="modal-dialog">
-        <div class="modal-header">
-          <div class="modal-title">Formulate Verdict</div>
-          <div class="modal-desc">Link a decision inquiry to its upstream truth dependencies.</div>
-        </div>
-        <form id="form-verdict">
-          <div class="form-group">
-            <label>Verdict Identifier</label>
-            <input class="form-control" name="verdict_id" required value="verdict-decision-${Date.now()}" />
+  if (activeModal === "anchor") {
+    return `
+      <div class="modal-backdrop" id="modal-backdrop">
+        <div class="modal-dialog">
+          <div class="modal-header">
+            <div class="modal-title">Anchor Empirical Ground Truth</div>
+            <button class="modal-close" id="btn-modal-close">✕</button>
           </div>
-          <div class="form-group">
-            <label>Decision Inquiry / Question</label>
-            <textarea class="form-control" name="inquiry" rows="3" required placeholder="Should the vendor procurement agreement remain authorized?"></textarea>
-          </div>
-          <div class="form-group">
-            <label>Select Upstream Dependencies</label>
-            <div style="max-height: 120px; overflow-y: auto; background: var(--bg-card); padding: 0.5rem; border-radius: 6px;">
-              ${topologyNodes.map((n) => `
-                <label style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.25rem; font-size: 0.85rem;">
-                  <input type="checkbox" name="deps" value="${n.id}" />
-                  <span>${n.title || n.id} (${n.kind})</span>
-                </label>
-              `).join("")}
+          <form id="form-create-anchor" class="modal-body">
+            <div class="form-group">
+              <label class="form-label">Anchor Identifier</label>
+              <input type="text" class="form-input" id="inp-anchor-id" placeholder="e.g. anchor-compliance-iso" required />
             </div>
-          </div>
-          <div class="form-actions">
-            <button class="btn btn-secondary" type="button" data-close-modal>Cancel</button>
-            <button class="btn btn-primary" type="submit">Establish Verdict</button>
-          </div>
-        </form>
+            <div class="form-group">
+              <label class="form-label">Observed Web Endpoint (HTTPS)</label>
+              <input type="url" class="form-input" id="inp-anchor-uri" placeholder="https://registry.example.org/cert.json" required />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Tracked Empirical Hypothesis</label>
+              <textarea class="form-textarea" id="inp-anchor-hypothesis" rows="3" placeholder="State the exact factual claim that validators must continuously verify against the URL..." required></textarea>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" id="btn-modal-cancel">Cancel</button>
+              <button type="submit" class="btn btn-primary">Register Anchor On-Chain</button>
+            </div>
+          </form>
+        </div>
       </div>
-    </div>
-  `;
+    `;
+  }
+
+  if (activeModal === "verdict") {
+    return `
+      <div class="modal-backdrop" id="modal-backdrop">
+        <div class="modal-dialog">
+          <div class="modal-header">
+            <div class="modal-title">Establish Causal Verdict</div>
+            <button class="modal-close" id="btn-modal-close">✕</button>
+          </div>
+          <form id="form-create-verdict" class="modal-body">
+            <div class="form-group">
+              <label class="form-label">Verdict Identifier</label>
+              <input type="text" class="form-input" id="inp-verdict-id" placeholder="e.g. verdict-credit-facility" required />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Reasoned Inquiry</label>
+              <textarea class="form-textarea" id="inp-verdict-inquiry" rows="3" placeholder="Specify the decision question to be evaluated by consensus validators..." required></textarea>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Upstream Dependencies (Select 1 or more)</label>
+              <div class="dep-selector">
+                ${topologyNodes.length === 0 ? `<p style="color: var(--text-muted); font-size: 0.85rem;">No nodes registered yet. Register an Anchor first.</p>` : ""}
+                ${topologyNodes.map((n) => `
+                  <label class="dep-checkbox-label">
+                    <input type="checkbox" name="deps" value="${n.id}" />
+                    <span><strong>${n.id}</strong> (${n.kind})</span>
+                  </label>
+                `).join("")}
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" id="btn-modal-cancel">Cancel</button>
+              <button type="submit" class="btn btn-primary">Establish Verdict On-Chain</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+  }
+
+  if (activeModal === "settings") {
+    return `
+      <div class="modal-backdrop" id="modal-backdrop">
+        <div class="modal-dialog">
+          <div class="modal-header">
+            <div class="modal-title">Protocol Contract Settings</div>
+            <button class="modal-close" id="btn-modal-close">✕</button>
+          </div>
+          <form id="form-settings" class="modal-body">
+            <div class="form-group">
+              <label class="form-label">Intelligent Contract Address</label>
+              <input type="text" class="form-input" id="inp-settings-contract" value="${CONFIG.contractAddress}" required />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Network RPC</label>
+              <input type="text" class="form-input" value="https://studio-dev.genlayer.com/api" disabled />
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" id="btn-modal-cancel">Cancel</button>
+              <button type="submit" class="btn btn-primary">Save Settings</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+  }
+
+  return "";
 }
 
 // -----------------------------------------------------------------------------
-// Interactive Events
+// DOM Event Listeners & Interactive Handlers
 // -----------------------------------------------------------------------------
 
 function bindEvents() {
-  document.getElementById("btn-wallet")?.addEventListener("click", () => connectWallet().catch(alert));
+  document.getElementById("btn-wallet")?.addEventListener("click", () => {
+    connectWallet().catch((err) => alert(err.message));
+  });
 
-  document.getElementById("btn-toggle-sim")?.addEventListener("click", () => {
-    isSimulatingMutation = !isSimulatingMutation;
+  document.getElementById("btn-empty-wallet")?.addEventListener("click", () => {
+    connectWallet().catch((err) => alert(err.message));
+  });
+
+  document.getElementById("btn-refresh-chain")?.addEventListener("click", () => {
+    refreshOnChainState().catch((err) => alert(err.message));
+  });
+
+  document.getElementById("btn-config-contract")?.addEventListener("click", () => {
+    activeModal = "settings";
     renderApp();
   });
 
-  document.querySelectorAll(".node-card").forEach((card) => {
-    card.addEventListener("click", () => {
-      selectedNodeId = card.dataset.nodeId;
-      renderApp();
-    });
-  });
-
-  document.getElementById("btn-close-drawer")?.addEventListener("click", () => {
-    document.getElementById("telemetry-drawer")?.classList.remove("open");
-  });
-
   document.getElementById("btn-anchor-modal")?.addEventListener("click", () => {
+    activeModal = "anchor";
+    renderApp();
+  });
+
+  document.getElementById("btn-empty-anchor")?.addEventListener("click", () => {
     activeModal = "anchor";
     renderApp();
   });
@@ -471,79 +634,116 @@ function bindEvents() {
     renderApp();
   });
 
-  document.querySelectorAll("[data-close-modal]").forEach((b) => {
-    b.addEventListener("click", () => {
-      activeModal = null;
+  document.getElementById("btn-modal-close")?.addEventListener("click", () => {
+    activeModal = null;
+    renderApp();
+  });
+
+  document.getElementById("btn-modal-cancel")?.addEventListener("click", () => {
+    activeModal = null;
+    renderApp();
+  });
+
+  document.getElementById("btn-close-drawer")?.addEventListener("click", () => {
+    selectedNodeId = null;
+    effectiveStatusResult = null;
+    renderApp();
+  });
+
+  // Node selection from canvas cards
+  document.querySelectorAll(".node-card").forEach((card) => {
+    card.addEventListener("click", () => {
+      selectedNodeId = card.getAttribute("data-node-id");
+      effectiveStatusResult = null;
       renderApp();
     });
   });
 
-  document.getElementById("form-anchor")?.addEventListener("submit", async (e) => {
+  // Create Anchor Form
+  document.getElementById("form-create-anchor")?.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const data = new FormData(e.target);
-    const newAnchor = {
-      id: data.get("anchor_id"),
-      kind: "ANCHOR",
-      title: data.get("anchor_id"),
-      hypothesis: data.get("hypothesis"),
-      uri: data.get("uri"),
-      status: "ANCHOR_GENESIS",
-      epoch: 0,
-      depth: 0
-    };
-    topologyNodes.push(newAnchor);
-    activeModal = null;
-    selectedNodeId = newAnchor.id;
-    renderApp();
+    const id = document.getElementById("inp-anchor-id").value.trim();
+    const uri = document.getElementById("inp-anchor-uri").value.trim();
+    const hypothesis = document.getElementById("inp-anchor-hypothesis").value.trim();
+
+    try {
+      activeModal = null;
+      rememberNodeId(id);
+      await executeWrite("register_anchor", [id, uri, hypothesis]);
+    } catch (err) {
+      alert(`Anchor registration failed: ${err.message}`);
+    }
   });
 
-  document.getElementById("form-verdict")?.addEventListener("submit", async (e) => {
+  // Create Verdict Form
+  document.getElementById("form-create-verdict")?.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const data = new FormData(e.target);
-    const checkedDeps = Array.from(e.target.querySelectorAll("input[name=deps]:checked")).map((i) => i.value);
-    if (!checkedDeps.length) {
+    const id = document.getElementById("inp-verdict-id").value.trim();
+    const inquiry = document.getElementById("inp-verdict-inquiry").value.trim();
+    const checkboxes = document.querySelectorAll('input[name="deps"]:checked');
+    const dependencies = Array.from(checkboxes).map((cb) => cb.value);
+
+    if (dependencies.length === 0) {
       alert("Please select at least one upstream dependency.");
       return;
     }
-    const newVerdict = {
-      id: data.get("verdict_id"),
-      kind: "VERDICT",
-      title: data.get("verdict_id"),
-      inquiry: data.get("inquiry"),
-      dependencies: checkedDeps,
-      status: "VERDICT_INITIAL_STALE",
-      effective_status: "VERDICT_INITIAL_STALE",
-      epoch: 0,
-      depth: 1
-    };
-    topologyNodes.push(newVerdict);
-    checkedDeps.forEach((dep) => topologyEdges.push([dep, newVerdict.id]));
-    activeModal = null;
-    selectedNodeId = newVerdict.id;
-    renderApp();
-  });
 
-  document.getElementById("btn-audit-anchor")?.addEventListener("click", async () => {
-    const target = topologyNodes.find((n) => n.id === selectedNodeId);
-    if (target) {
-      target.status = "ANCHOR_ACTIVE";
-      target.epoch = (target.epoch || 0) + 1;
-      alert(`Audit completed for ${target.id}: Baseline verified.`);
-      renderApp();
+    try {
+      activeModal = null;
+      rememberNodeId(id);
+      await executeWrite("establish_verdict", [id, inquiry, dependencies]);
+    } catch (err) {
+      alert(`Verdict establishment failed: ${err.message}`);
     }
   });
 
+  // Settings Form
+  document.getElementById("form-settings")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const newAddress = document.getElementById("inp-settings-contract").value.trim();
+    if (newAddress) {
+      CONFIG.contractAddress = newAddress;
+      localStorage.setItem("cascadia_contract", newAddress);
+      activeModal = null;
+      refreshOnChainState().catch(console.error);
+    }
+  });
+
+  // Action: Audit Anchor On-Chain
+  document.getElementById("btn-audit-anchor")?.addEventListener("click", async () => {
+    if (!selectedNodeId) return;
+    try {
+      await executeWrite("audit_anchor", [selectedNodeId]);
+    } catch (err) {
+      alert(`Audit transaction failed: ${err.message}`);
+    }
+  });
+
+  // Action: Adjudicate Verdict On-Chain
   document.getElementById("btn-adjudicate-verdict")?.addEventListener("click", async () => {
-    const target = topologyNodes.find((n) => n.id === selectedNodeId);
-    if (target) {
-      target.status = "VERDICT_VALID";
-      target.effective_status = "VERDICT_VALID";
-      target.epoch = (target.epoch || 0) + 1;
-      alert(`Adjudication completed for ${target.id}: Verdict affirmed.`);
+    if (!selectedNodeId) return;
+    try {
+      await executeWrite("adjudicate_verdict", [selectedNodeId]);
+    } catch (err) {
+      alert(`Adjudication transaction failed: ${err.message}`);
+    }
+  });
+
+  // Action: Verify Effective Status (Zero-Gas Read)
+  document.getElementById("btn-verify-effective")?.addEventListener("click", async () => {
+    if (!selectedNodeId) return;
+    try {
+      const result = await executeRead("evaluate_effective_verdict", [selectedNodeId]);
+      effectiveStatusResult = result || "Unknown";
       renderApp();
+    } catch (err) {
+      alert(`Verification call failed: ${err.message}`);
     }
   });
 }
 
-// Initial draw
-renderApp();
+// Initial Bootstrapping: Auto-sync on-chain state on page load
+refreshOnChainState().catch((err) => {
+  console.log("Initial on-chain sync notice:", err);
+  renderApp();
+});
