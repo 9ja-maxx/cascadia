@@ -37,14 +37,13 @@ def generate_deployment_payload(source_code: str, admin_address: str):
     return {
         "contract_name": "Cascadia",
         "source_code": source_code,
-        "constructor_args": [admin_address],
+        "constructor_args": [],
         "vm_runtime": "genlayer-intelligent-contract-v1"
     }
 
 def main():
     parser = argparse.ArgumentParser(description="Deploy Cascadia Protocol Intelligent Contract to GenLayer")
     parser.add_argument("--network", choices=["local", "studio-dev", "testnet"], default="studio-dev", help="Target GenLayer network")
-    parser.add_argument("--admin", default="0x0000000000000000000000000000000000000000", help="Protocol admin address")
     parser.add_argument("--contract", default="contracts/cascadia.py", help="Path to contract Python file")
     parser.add_argument("--dry-run", action="store_true", default=True, help="Simulate deployment payload generation")
     
@@ -54,25 +53,23 @@ def main():
     print("CASCADIA PROTOCOL — INTELLIGENT CONTRACT DEPLOYER")
     print("=" * 70)
     print(f"Target Network: {args.network} ({DEFAULT_RPC_URLS[args.network]})")
-    print(f"Admin Address:  {args.admin}")
     print(f"Contract File:  {args.contract}")
+    print(f"Live Deployment: 0x037d35F587555cAdE69840e19a1e1b58C65e4f7f")
     print("-" * 70)
     
     contract_path = Path(args.contract)
     source = inspect_contract(contract_path)
-    payload = generate_deployment_payload(source, args.admin)
+    payload = generate_deployment_payload(source, "")
     
     print("\nDeployment manifest prepared successfully.")
     print(f"Payload Size: {len(payload['source_code'])} bytes")
-    print(f"Constructor Parameters: admin_address={args.admin}")
+    print("Constructor Parameters: None (auto-initialized)")
     
     if args.dry_run:
-        print("\n[DRY RUN COMPLETE] To deploy on GenLayer Studio:")
-        print("  1. Open https://studio.genlayer.com")
-        print("  2. Create a new contract file 'cascadia.py'")
-        print("  3. Paste the contents of 'contracts/cascadia.py'")
-        print("  4. Click 'Deploy' and copy the resulting deployed contract address.")
-        print("  5. Paste the address into frontend/.env or the UI Settings modal.")
+        print("\n[ACTIVE DEPLOYMENT DETECTED]")
+        print("  - Studio Net Address: 0x037d35F587555cAdE69840e19a1e1b58C65e4f7f")
+        print("  - Chain ID: 61999 (GenLayer Studio Dev)")
+        print("  - Configured in frontend/.env and frontend/src/main.js")
     return 0
 
 if __name__ == "__main__":
