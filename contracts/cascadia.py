@@ -1,30 +1,10 @@
-# { "Depends": "py-genlayer:5jycge4q8k23462jtb0b9fyey1s9qz928sz2nbrd9mg4sxqg2qng" }
+# { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 
-"""
-CASCADIA PROTOCOL: Autonomous Causal Dependency and Truth-Cascade Engine
-========================================================================
-A GenLayer-native intelligent contract for maintaining living decision topologies.
-
-Traditional on-chain architectures suffer from a critical vulnerability: decisions
-and attestations remain permanently recorded as "valid" even when the empirical
-real-world facts or upstream conclusions underpinning them have mutated or expired.
-
-CASCADIA establishes a living topological mesh of verifiable external anchors
-(HTTPS sources) and derived verdicts (reasoned conclusions). When ground-truth
-facts shift, CASCADIA reaches validator consensus over external web observations
-and deterministically cascades staleness down reverse dependency edges, protecting
-protocols against silent decision obsolescence.
-"""
-
+from genlayer import *
 import hashlib
 import json
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlsplit
-
-import genlayer as gl
-from genlayer.types import *
-
 
 # -----------------------------------------------------------------------------
 # Protocol Constants & Lifecycle States
@@ -50,16 +30,16 @@ MUTATION_DETECTED = "MUTATION_DETECTED"
 NO_MUTATION = "NO_MUTATION"
 OBSERVATION_INDETERMINATE = "OBSERVATION_INDETERMINATE"
 
-# Verdict Adjudication Outcomes
+# Verdict Adjudication Categorical Outcomes
 VERDICT_AFFIRMED = "VERDICT_AFFIRMED"
 VERDICT_DISPROVED = "VERDICT_DISPROVED"
 VERDICT_UNRESOLVED = "VERDICT_UNRESOLVED"
 
-# Protocol Boundary Limits (Guarding against resource exhaustion & denial-of-service)
-MAX_IDENTIFIER = 96
-MAX_URI = 2048
-MAX_HYPOTHESIS = 4000
-MAX_INQUIRY = 4000
+# Protocol Bounds & Limits
+MAX_IDENTIFIER = 64
+MAX_URI = 1024
+MAX_HYPOTHESIS = 2048
+MAX_INQUIRY = 2048
 MAX_RATIONALE = 512
 MAX_RENDER_PAYLOAD = 32768
 MAX_DEPENDENCIES_PER_VERDICT = 8
@@ -72,10 +52,9 @@ VERDICT_ADJUDICATION_KEYS = {"outcome", "rationale", "affected_dependency_ids"}
 
 
 # -----------------------------------------------------------------------------
-# Storage Schemas
+# Record Schemas & Serialization
 # -----------------------------------------------------------------------------
 
-@gl.storage.allow
 @dataclass
 class AnchorRecord:
     """Verifiable ground-truth external web observation point."""
@@ -83,15 +62,44 @@ class AnchorRecord:
     custodian: str
     uri: str
     tracked_hypothesis: str
-    epoch: u256
+    epoch: int
     content_digest: str
     semantic_snapshot: str
     status: str
     definition_fingerprint: str
     epoch_fingerprint: str
 
+    def to_json(self) -> str:
+        return json.dumps({
+            "anchor_id": self.anchor_id,
+            "custodian": self.custodian,
+            "uri": self.uri,
+            "tracked_hypothesis": self.tracked_hypothesis,
+            "epoch": int(self.epoch),
+            "content_digest": self.content_digest,
+            "semantic_snapshot": self.semantic_snapshot,
+            "status": self.status,
+            "definition_fingerprint": self.definition_fingerprint,
+            "epoch_fingerprint": self.epoch_fingerprint,
+        }, sort_keys=True)
 
-@gl.storage.allow
+    @classmethod
+    def from_json(cls, raw: str) -> "AnchorRecord":
+        d = json.loads(raw)
+        return cls(
+            anchor_id=d["anchor_id"],
+            custodian=d["custodian"],
+            uri=d["uri"],
+            tracked_hypothesis=d["tracked_hypothesis"],
+            epoch=int(d["epoch"]),
+            content_digest=d["content_digest"],
+            semantic_snapshot=d["semantic_snapshot"],
+            status=d["status"],
+            definition_fingerprint=d["definition_fingerprint"],
+            epoch_fingerprint=d["epoch_fingerprint"],
+        )
+
+
 @dataclass
 class VerdictRecord:
     """Reasoned conclusion bound to an upstream dependency topology."""
@@ -100,12 +108,44 @@ class VerdictRecord:
     inquiry: str
     dependencies_json: str
     dependency_epoch_snapshot: str
-    topology_depth: u256
-    epoch: u256
+    topology_depth: int
+    epoch: int
     adjudication_json: str
     status: str
     definition_fingerprint: str
     epoch_fingerprint: str
+
+    def to_json(self) -> str:
+        return json.dumps({
+            "verdict_id": self.verdict_id,
+            "curator": self.curator,
+            "inquiry": self.inquiry,
+            "dependencies_json": self.dependencies_json,
+            "dependency_epoch_snapshot": self.dependency_epoch_snapshot,
+            "topology_depth": int(self.topology_depth),
+            "epoch": int(self.epoch),
+            "adjudication_json": self.adjudication_json,
+            "status": self.status,
+            "definition_fingerprint": self.definition_fingerprint,
+            "epoch_fingerprint": self.epoch_fingerprint,
+        }, sort_keys=True)
+
+    @classmethod
+    def from_json(cls, raw: str) -> "VerdictRecord":
+        d = json.loads(raw)
+        return cls(
+            verdict_id=d["verdict_id"],
+            curator=d["curator"],
+            inquiry=d["inquiry"],
+            dependencies_json=d["dependencies_json"],
+            dependency_epoch_snapshot=d["dependency_epoch_snapshot"],
+            topology_depth=int(d["topology_depth"]),
+            epoch=int(d["epoch"]),
+            adjudication_json=d["adjudication_json"],
+            status=d["status"],
+            definition_fingerprint=d["definition_fingerprint"],
+            epoch_fingerprint=d["epoch_fingerprint"],
+        )
 
 
 # -----------------------------------------------------------------------------
@@ -142,111 +182,121 @@ def _sanitize_identifier(value: Any, field_name: str) -> str:
 def _sanitize_https_uri(value: Any) -> str:
     """Enforces valid HTTPS URI formatting, rejecting URL fragments and insecure schemes."""
     uri_str = _sanitize_string(value, MAX_URI, "uri")
-    parsed = urlsplit(uri_str)
-    if parsed.scheme.lower() != "https" or not parsed.netloc or parsed.fragment:
-        raise gl.vm.UserError("Source URI must be a valid HTTPS location without URL fragments.")
+    if not uri_str.startswith("https://") or len(uri_str) <= 8:
+        raise gl.vm.UserError("Source URI must be a valid HTTPS location (starting with https://).")
+    if "#" in uri_str:
+        raise gl.vm.UserError("Source URI must not contain URL fragments (#).")
     return uri_str
 
 
 def _validate_anchor_model_output(payload: Any) -> dict[str, str]:
-    """Validates schema adherence for validator LLM anchor observation outputs."""
+    """Validates the categorical output schema returned by the observation LLM."""
     if not isinstance(payload, dict) or set(payload.keys()) != ANCHOR_OBSERVATION_KEYS:
-        raise gl.vm.UserError("Malformed anchor observation schema from model.")
+        raise gl.vm.UserError("Anchor model output does not conform to required observation schema.")
     mutation = payload.get("mutation")
     rationale = payload.get("rationale")
     if mutation not in (MUTATION_DETECTED, NO_MUTATION, OBSERVATION_INDETERMINATE):
-        raise gl.vm.UserError(f"Illegal anchor mutation value: {mutation}")
+        raise gl.vm.UserError(f"Illegal mutation state '{mutation}' in anchor model response.")
     if not isinstance(rationale, str) or not rationale.strip() or len(rationale) > MAX_RATIONALE:
-        raise gl.vm.UserError("Anchor observation rationale exceeds boundary limits.")
-    return {"mutation": mutation, "rationale": rationale}
+        raise gl.vm.UserError("Anchor model rationale is invalid, empty, or exceeds length ceiling.")
+    return {"mutation": mutation, "rationale": rationale.strip()}
 
 
 def _validate_observation_package(package: Any) -> dict[str, Any]:
-    """Validates full observation tuple (raw digest + semantic verdict)."""
-    if not isinstance(package, dict) or set(package.keys()) != {"content_digest", "semantic"}:
-        raise gl.vm.UserError("Invalid observation package structure.")
-    digest = package.get("content_digest")
-    if not isinstance(digest, str) or len(digest) != 64:
-        raise gl.vm.UserError("Content digest must be a 64-character SHA-256 hexadecimal string.")
-    semantic = _validate_anchor_model_output(package.get("semantic"))
-    return {"content_digest": digest, "semantic": semantic}
+    """Validates structure of raw non-deterministic observation payload."""
+    if not isinstance(package, dict) or "content_digest" not in package or "semantic" not in package:
+        raise gl.vm.UserError("Observation package missing required digest or semantic components.")
+    if not isinstance(package["content_digest"], str) or len(package["content_digest"]) != 64:
+        raise gl.vm.UserError("Observation package carries an invalid SHA-256 content digest.")
+    semantic = _validate_anchor_model_output(package["semantic"])
+    return {"content_digest": package["content_digest"], "semantic": semantic}
 
 
 def _validate_verdict_model_output(payload: Any, valid_dependencies: list[str]) -> dict[str, Any]:
-    """Validates schema adherence for validator LLM verdict adjudication outputs."""
+    """Validates the categorical adjudication schema returned by the decision LLM."""
     if not isinstance(payload, dict) or set(payload.keys()) != VERDICT_ADJUDICATION_KEYS:
-        raise gl.vm.UserError("Malformed verdict adjudication schema from model.")
+        raise gl.vm.UserError("Verdict model output does not conform to required adjudication schema.")
     outcome = payload.get("outcome")
     rationale = payload.get("rationale")
     affected = payload.get("affected_dependency_ids")
 
     if outcome not in (VERDICT_AFFIRMED, VERDICT_DISPROVED, VERDICT_UNRESOLVED):
-        raise gl.vm.UserError(f"Illegal verdict adjudication outcome: {outcome}")
+        raise gl.vm.UserError(f"Illegal adjudication outcome '{outcome}' in verdict model response.")
     if not isinstance(rationale, str) or not rationale.strip() or len(rationale) > MAX_RATIONALE:
-        raise gl.vm.UserError("Verdict rationale exceeds boundary limits.")
-    if not isinstance(affected, list) or len(affected) > MAX_DEPENDENCIES_PER_VERDICT:
-        raise gl.vm.UserError("Affected dependency list is corrupted or too large.")
+        raise gl.vm.UserError("Verdict model rationale is invalid, empty, or exceeds length ceiling.")
+    if not isinstance(affected, list):
+        raise gl.vm.UserError("Affected dependencies must be returned as a JSON list.")
 
-    unique_affected: list[str] = []
+    valid_set = set(valid_dependencies)
+    clean_affected: list[str] = []
     for dep_id in affected:
-        if not isinstance(dep_id, str) or dep_id not in valid_dependencies:
-            raise gl.vm.UserError(f"Verdict references unknown affected dependency: {dep_id}")
-        if dep_id in unique_affected:
-            raise gl.vm.UserError(f"Duplicate affected dependency ID: {dep_id}")
-        unique_affected.append(dep_id)
+        if not isinstance(dep_id, str) or dep_id not in valid_set:
+            raise gl.vm.UserError(f"Affected dependency '{dep_id}' is not in the declared dependency set.")
+        if dep_id not in clean_affected:
+            clean_affected.append(dep_id)
+    clean_affected.sort()
 
     return {
         "outcome": outcome,
-        "rationale": rationale,
-        "affected_dependency_ids": sorted(unique_affected),
+        "rationale": rationale.strip(),
+        "affected_dependency_ids": clean_affected,
     }
 
 
 # -----------------------------------------------------------------------------
-# Prompt Builders
+# Consensus Prompt Engineering
 # -----------------------------------------------------------------------------
 
 def _build_anchor_audit_prompt(
     uri: str,
     hypothesis: str,
-    previous_digest: str,
-    previous_semantic_json: str,
+    prior_digest: str,
+    prior_semantic_json: str,
     rendered_body: str,
 ) -> str:
-    """Constructs prompt for multi-validator empirical web observation."""
-    prev_str = previous_semantic_json if previous_semantic_json else "NONE (GENESIS OBSERVATION)"
+    """Constructs prompt for multi-validator empirical truth evaluation."""
+    prior_info = prior_semantic_json if prior_semantic_json else "None (Initial Baseline)"
     return (
-        "You are an impartial GenLayer consensus validator auditing an empirical ground-truth anchor for CASCADIA.\n"
-        "Analyze whether the newly observed webpage content materially alters the tracked hypothesis.\n"
-        "A material mutation occurs if the newly observed facts could invalidate downstream decisions relying on the claim.\n"
-        "Rely strictly on the rendered content. Do not extrapolate unsupported assumptions.\n\n"
-        f"Registered URI: {uri}\n"
-        f"Tracked Hypothesis: {hypothesis}\n"
-        f"Prior Content SHA-256 Digest: {previous_digest}\n"
-        f"Prior Semantic Record: {prev_str}\n"
-        f"Current Rendered Content:\n{rendered_body}\n\n"
-        "Respond with EXACTLY ONE JSON object matching this schema and no other text:\n"
-        '{"mutation": "MUTATION_DETECTED|NO_MUTATION|OBSERVATION_INDETERMINATE", "rationale": "..."}\n'
-        "Keep the rationale concise, empirical, and under 512 characters.\n"
-        "If the webpage is inaccessible, empty, or contradictory, output OBSERVATION_INDETERMINATE."
+        "You are an empirical fact-checking validator in the CASCADIA Protocol.\n"
+        "Your task is to observe rendered web content and evaluate a specific factual hypothesis.\n\n"
+        f"TARGET URI: {uri}\n"
+        f"TRACKED HYPOTHESIS: {hypothesis}\n"
+        f"PRIOR CONTENT HASH: {prior_digest if prior_digest else 'GENESIS'}\n"
+        f"PRIOR SEMANTIC STATE: {prior_info}\n\n"
+        "--- LIVE OBSERVED EVIDENCE BEGIN ---\n"
+        f"{rendered_body[:MAX_RENDER_PAYLOAD]}\n"
+        "--- LIVE OBSERVED EVIDENCE END ---\n\n"
+        "Analyze whether the live content affirms or mutates the hypothesis:\n"
+        "1. If the hypothesis remains fully supported and true: 'NO_MUTATION'\n"
+        "2. If the ground truth has shifted, expired, revoked, or changed: 'MUTATION_DETECTED'\n"
+        "3. If evidence is ambiguous, missing, or contradictory: 'OBSERVATION_INDETERMINATE'\n\n"
+        "Return ONLY a JSON object with this exact schema:\n"
+        '{"mutation": "NO_MUTATION|MUTATION_DETECTED|OBSERVATION_INDETERMINATE", "rationale": "..."}\n'
+        "Keep the rationale concise and under 512 characters."
     )
 
 
 def _build_verdict_adjudication_prompt(
     inquiry: str,
-    dependencies_json: str,
-    snapshot_json: str,
-    topology_context_json: str,
+    context_json: str,
+    valid_dependencies: list[str],
 ) -> str:
-    """Constructs prompt for multi-validator verdict re-evaluation."""
+    """Constructs prompt for multi-validator causal verdict adjudication."""
+    dep_list_str = ", ".join(valid_dependencies)
     return (
-        "You are an impartial GenLayer consensus validator adjudicating a CASCADIA verdict.\n"
-        "Evaluate the inquiry against the current state of its upstream dependency topology.\n\n"
-        f"Inquiry / Decision Question: {inquiry}\n"
-        f"Declared Dependencies (JSON): {dependencies_json}\n"
-        f"Recorded Epoch Snapshot: {snapshot_json}\n"
-        f"Current Upstream Topology Context: {topology_context_json}\n\n"
-        "Respond with EXACTLY ONE JSON object matching this schema and no other text:\n"
+        "You are a causal adjudication validator in the CASCADIA Protocol.\n"
+        "Evaluate the following inquiry strictly based on the current state of its dependencies.\n\n"
+        f"PRIMARY INQUIRY: {inquiry}\n"
+        f"VALID DEPENDENCIES: [{dep_list_str}]\n\n"
+        "--- CURRENT DEPENDENCY CONTEXT BEGIN ---\n"
+        f"{context_json}\n"
+        "--- CURRENT DEPENDENCY CONTEXT END ---\n\n"
+        "Determine the status of the inquiry:\n"
+        "1. If dependency facts support affirmative resolution: 'VERDICT_AFFIRMED'\n"
+        "2. If facts invalidate or contradict the inquiry: 'VERDICT_DISPROVED'\n"
+        "3. If evidence is incomplete or indeterminable: 'VERDICT_UNRESOLVED'\n\n"
+        "List all dependency IDs whose status specifically affected this determination.\n"
+        "Return ONLY a JSON object with this exact schema:\n"
         '{"outcome": "VERDICT_AFFIRMED|VERDICT_DISPROVED|VERDICT_UNRESOLVED", '
         '"rationale": "...", "affected_dependency_ids": ["..."]}\n'
         "Every ID in affected_dependency_ids must belong to the declared dependencies list.\n"
@@ -258,23 +308,29 @@ def _build_verdict_adjudication_prompt(
 # Main Intelligent Contract Class
 # -----------------------------------------------------------------------------
 
-class Cascadia(gl.contract.Contract):
+class Cascadia(gl.Contract):
     """
     CASCADIA PROTOCOL
     Autonomous causal dependency graph, empirical truth monitoring, and staleness cascades.
     """
 
-    anchors: gl.storage.TreeMap[str, AnchorRecord]
-    verdicts: gl.storage.TreeMap[str, VerdictRecord]
-    registry_kind: gl.storage.TreeMap[str, str]            # Unified namespace preventing ID collisions
-    downstream_dependents: gl.storage.TreeMap[str, str]    # Canonical reverse-edge adjacency list
-    curator_anchors: gl.storage.TreeMap[str, str]          # Account -> [anchor_id, ...]
-    curator_verdicts: gl.storage.TreeMap[str, str]         # Account -> [verdict_id, ...]
+    anchors: TreeMap[str, str]
+    verdicts: TreeMap[str, str]
+    registry_kind: TreeMap[str, str]            # Unified namespace preventing ID collisions
+    downstream_dependents: TreeMap[str, str]    # Canonical reverse-edge adjacency list
+    curator_anchors: TreeMap[str, str]          # Account -> [anchor_id, ...]
+    curator_verdicts: TreeMap[str, str]         # Account -> [verdict_id, ...]
     total_nodes: u256
 
     def __init__(self):
         """Initializes the empty CASCADIA topology."""
-        self.total_nodes = 0
+        self.total_nodes = u256(0)
+        self.anchors = TreeMap()
+        self.verdicts = TreeMap()
+        self.registry_kind = TreeMap()
+        self.downstream_dependents = TreeMap()
+        self.curator_anchors = TreeMap()
+        self.curator_verdicts = TreeMap()
 
     # -------------------------------------------------------------------------
     # Public Write Operations
@@ -325,11 +381,11 @@ class Cascadia(gl.contract.Contract):
             epoch_fingerprint=epoch_fingerprint,
         )
 
-        self.anchors[anchor_id] = record
+        self._save_anchor(record)
         self.registry_kind[anchor_id] = "ANCHOR"
         self.downstream_dependents[anchor_id] = "[]"
         self._append_to_index(self.curator_anchors, custodian, anchor_id)
-        self.total_nodes = self.total_nodes + 1
+        self.total_nodes = self.total_nodes + u256(1)
 
         return json.dumps(
             {
@@ -359,87 +415,76 @@ class Cascadia(gl.contract.Contract):
         if int(self.total_nodes) >= MAX_CASCADE_NODES:
             raise gl.vm.UserError("Topology node ceiling reached (128 nodes maximum).")
 
-        canonical_deps: list[str] = []
+        clean_dependencies: list[str] = []
         for dep_id in dependencies:
-            dep_id = _sanitize_identifier(dep_id, "dependency_id")
-            if dep_id == verdict_id:
-                raise gl.vm.UserError("Self-referential dependencies are strictly prohibited.")
-            if dep_id in canonical_deps:
-                raise gl.vm.UserError(f"Duplicate dependency declared: {dep_id}")
-            if not self.registry_kind.get(dep_id, ""):
-                raise gl.vm.UserError(f"Referenced dependency '{dep_id}' does not exist in topology.")
-            canonical_deps.append(dep_id)
+            clean_dep = _sanitize_identifier(dep_id, "dependency_id")
+            if clean_dep == verdict_id:
+                raise gl.vm.UserError("Self-referential dependencies are forbidden.")
+            if clean_dep not in clean_dependencies:
+                clean_dependencies.append(clean_dep)
+        clean_dependencies.sort()
 
-        canonical_deps.sort()
-        self._assert_acyclic(verdict_id, canonical_deps)
+        self._assert_dependencies_intact(clean_dependencies)
+        self._assert_acyclic(verdict_id, clean_dependencies)
 
-        computed_depth = 1
-        for dep_id in canonical_deps:
-            parent_depth = self._get_node_depth(dep_id) + 1
-            if parent_depth > computed_depth:
-                computed_depth = parent_depth
+        depth = 0
+        for dep_id in clean_dependencies:
+            dep_depth = self._get_node_depth(dep_id)
+            if dep_depth + 1 > depth:
+                depth = dep_depth + 1
 
-        if computed_depth > MAX_TOPOLOGY_DEPTH:
-            raise gl.vm.UserError(f"Topology depth ({computed_depth}) exceeds protocol limit ({MAX_TOPOLOGY_DEPTH}).")
-
-        epoch_snapshot: dict[str, int] = {}
-        for dep_id in canonical_deps:
-            epoch_snapshot[dep_id] = self._get_node_epoch(dep_id)
-            existing_dependents = self._get_dependents_list(dep_id)
-            if len(existing_dependents) >= MAX_FANOUT_LIMIT:
-                raise gl.vm.UserError(f"Dependency '{dep_id}' has reached maximum fanout limit ({MAX_FANOUT_LIMIT}).")
+        if depth > MAX_TOPOLOGY_DEPTH:
+            raise gl.vm.UserError(f"Graph depth {depth} exceeds protocol safety ceiling of {MAX_TOPOLOGY_DEPTH}.")
 
         curator = str(gl.message.sender_address).lower()
-        deps_json = _canonical_json(canonical_deps)
-        snapshot_json = _canonical_json(epoch_snapshot)
+        dependencies_json = _canonical_json(clean_dependencies)
         definition_fingerprint = _digest_label(
             "CASCADIA-VERDICT-DEF-V1",
             verdict_id,
             curator,
             inquiry,
-            canonical_deps,
+            dependencies_json,
         )
-        initial_adjudication = ""
+
+        initial_snapshot = self._export_current_snapshot_json(clean_dependencies)
         epoch_fingerprint = _digest_label(
             "CASCADIA-VERDICT-EPOCH-V1",
             verdict_id,
             0,
-            initial_adjudication,
-            epoch_snapshot,
+            initial_snapshot,
+            "",
         )
 
         record = VerdictRecord(
             verdict_id=verdict_id,
             curator=curator,
             inquiry=inquiry,
-            dependencies_json=deps_json,
-            dependency_epoch_snapshot=snapshot_json,
-            topology_depth=computed_depth,
+            dependencies_json=dependencies_json,
+            dependency_epoch_snapshot=initial_snapshot,
+            topology_depth=depth,
             epoch=0,
-            adjudication_json=initial_adjudication,
+            adjudication_json="",
             status=VERDICT_INITIAL_STALE,
             definition_fingerprint=definition_fingerprint,
             epoch_fingerprint=epoch_fingerprint,
         )
 
-        self.verdicts[verdict_id] = record
+        self._save_verdict(record)
         self.registry_kind[verdict_id] = "VERDICT"
         self.downstream_dependents[verdict_id] = "[]"
-
-        # Register reverse edges for staleness cascades
-        for dep_id in canonical_deps:
-            self._register_dependent(dep_id, verdict_id)
-
         self._append_to_index(self.curator_verdicts, curator, verdict_id)
-        self.total_nodes = self.total_nodes + 1
+        self.total_nodes = self.total_nodes + u256(1)
+
+        # Register reverse dependency edges
+        for dep_id in clean_dependencies:
+            self._register_dependent(dep_id, verdict_id)
 
         return json.dumps(
             {
                 "verdict_id": verdict_id,
                 "status": VERDICT_INITIAL_STALE,
-                "epoch": 0,
-                "topology_depth": computed_depth,
-                "dependencies": canonical_deps,
+                "topology_depth": depth,
+                "dependencies": clean_dependencies,
                 "definition_fingerprint": definition_fingerprint,
             },
             sort_keys=True,
@@ -448,10 +493,12 @@ class Cascadia(gl.contract.Contract):
     @gl.public.write
     def audit_anchor(self, anchor_id: str) -> str:
         """
-        Executes multi-validator web rendering and semantic observation.
-        If empirical mutation is detected, cascades staleness down reverse dependency edges.
+        Executes multi-validator consensus to observe empirical web state and check for mutations.
+        Triggers reverse-edge staleness cascade if a material mutation is affirmed by consensus.
         """
+        anchor_id = _sanitize_identifier(anchor_id, "anchor_id")
         anchor = self._load_anchor(anchor_id)
+
         prior_digest = anchor.content_digest
         prior_semantic = anchor.semantic_snapshot
 
@@ -468,134 +515,82 @@ class Cascadia(gl.contract.Contract):
 
         content_digest = observation["content_digest"]
         semantic = observation["semantic"]
+        mutation = semantic["mutation"]
 
-        # Deterministic Genesis Baseline:
-        # The very first successful observation establishes the initial factual baseline.
-        # It cannot represent a mutation from non-existent prior content.
-        if not prior_digest and semantic["mutation"] != OBSERVATION_INDETERMINATE:
-            semantic = {
-                "mutation": NO_MUTATION,
-                "rationale": "Genesis observation established empirical truth baseline.",
-            }
-
-        # Contradiction guard: cannot claim mutation if byte content digest is identical
-        if semantic["mutation"] == MUTATION_DETECTED and prior_digest == content_digest:
-            self._degrade_anchor(anchor)
-            return self._anchor_export_json(anchor)
-
+        is_first_audit = anchor.status == ANCHOR_GENESIS
         anchor.content_digest = content_digest
         anchor.semantic_snapshot = _canonical_json(semantic)
+        anchor.epoch = anchor.epoch + 1
 
-        if semantic["mutation"] == MUTATION_DETECTED:
-            anchor.epoch = anchor.epoch + 1
+        if is_first_audit:
+            # Genesis observation establishes initial empirical baseline
+            if mutation == MUTATION_DETECTED:
+                anchor.status = ANCHOR_MUTATED
+            else:
+                anchor.status = ANCHOR_ACTIVE
+        elif mutation == MUTATION_DETECTED:
             anchor.status = ANCHOR_MUTATED
-            anchor.epoch_fingerprint = _digest_label(
-                "CASCADIA-ANCHOR-EPOCH-V1",
-                anchor.anchor_id,
-                int(anchor.epoch),
-                content_digest,
-                semantic,
-            )
-            # Cascade staleness deterministically to all downstream dependents
-            self._cascade_staleness(anchor.anchor_id)
-        elif semantic["mutation"] == NO_MUTATION:
-            anchor.status = ANCHOR_ACTIVE
-            anchor.epoch_fingerprint = _digest_label(
-                "CASCADIA-ANCHOR-EPOCH-V1",
-                anchor.anchor_id,
-                int(anchor.epoch),
-                content_digest,
-                semantic,
-            )
-        else:
+            self._cascade_staleness(anchor_id)
+        elif mutation == OBSERVATION_INDETERMINATE:
             anchor.status = ANCHOR_DEGRADED
-            anchor.epoch_fingerprint = _digest_label(
-                "CASCADIA-ANCHOR-EPOCH-V1",
-                anchor.anchor_id,
-                int(anchor.epoch),
-                content_digest,
-                semantic,
-            )
-            self._cascade_staleness(anchor.anchor_id)
+            self._cascade_staleness(anchor_id)
+        else:
+            if anchor.status != ANCHOR_ACTIVE:
+                anchor.status = ANCHOR_ACTIVE
 
+        anchor.epoch_fingerprint = _digest_label(
+            "CASCADIA-ANCHOR-EPOCH-V1",
+            anchor.anchor_id,
+            int(anchor.epoch),
+            anchor.content_digest,
+            anchor.semantic_snapshot,
+        )
+
+        self._save_anchor(anchor)
         return self._anchor_export_json(anchor)
 
     @gl.public.write
     def adjudicate_verdict(self, verdict_id: str) -> str:
         """
-        Re-evaluates a verdict against its current upstream dependency state.
-        If affirmed, advances epoch and updates snapshot. If disproved, propagates staleness.
+        Executes multi-validator consensus to adjudicate a verdict against its declared dependencies.
+        Enforces strict prerequisite that all upstream dependencies must be fresh and healthy.
         """
+        verdict_id = _sanitize_identifier(verdict_id, "verdict_id")
         verdict = self._load_verdict(verdict_id)
         dependencies = self._get_verdict_dependencies(verdict)
-        self._assert_dependencies_intact(dependencies)
 
-        snapshot = json.loads(verdict.dependency_epoch_snapshot)
-        context = self._build_dependency_context(dependencies, snapshot)
-        prompt = _build_verdict_adjudication_prompt(
-            verdict.inquiry,
-            verdict.dependencies_json,
-            verdict.dependency_epoch_snapshot,
-            _canonical_json(context),
-        )
+        if not self._are_dependencies_healthy(dependencies):
+            raise gl.vm.UserError("Cannot adjudicate verdict: one or more upstream dependencies are stale, mutated, or degraded.")
 
-        try:
-            adjudication = self._consensus_adjudicate_verdict(prompt, dependencies)
-        except Exception:
-            adjudication = {
-                "outcome": VERDICT_UNRESOLVED,
-                "rationale": "Adjudication consensus failed or external model error.",
-                "affected_dependency_ids": [],
-            }
+        current_snapshot = self._export_current_snapshot_json(dependencies)
+        context_json = self._build_dependency_context(dependencies)
+        prompt = _build_verdict_adjudication_prompt(verdict.inquiry, context_json, dependencies)
 
-        # Invariant safety guard: A verdict cannot be affirmed valid if any dependency is degraded/mutated
-        if adjudication["outcome"] == VERDICT_AFFIRMED and not self._are_dependencies_healthy(dependencies):
-            adjudication = {
-                "outcome": VERDICT_UNRESOLVED,
-                "rationale": "Verdict cannot be affirmed valid while upstream dependencies are unsafe.",
-                "affected_dependency_ids": [],
-            }
+        adjudication = self._consensus_adjudicate_verdict(prompt, dependencies)
+        outcome = adjudication["outcome"]
 
-        adjudication_json = _canonical_json(adjudication)
+        verdict.epoch = verdict.epoch + 1
+        verdict.dependency_epoch_snapshot = current_snapshot
+        verdict.adjudication_json = _canonical_json(adjudication)
 
-        if adjudication["outcome"] == VERDICT_AFFIRMED:
-            verdict.epoch = verdict.epoch + 1
+        if outcome == VERDICT_AFFIRMED:
             verdict.status = VERDICT_VALID
-            verdict.dependency_epoch_snapshot = self._export_current_snapshot_json(dependencies)
-            verdict.adjudication_json = adjudication_json
-            verdict.epoch_fingerprint = _digest_label(
-                "CASCADIA-VERDICT-EPOCH-V1",
-                verdict.verdict_id,
-                int(verdict.epoch),
-                adjudication,
-                json.loads(verdict.dependency_epoch_snapshot),
-            )
-        elif adjudication["outcome"] == VERDICT_DISPROVED:
-            verdict.epoch = verdict.epoch + 1
+        elif outcome == VERDICT_DISPROVED:
             verdict.status = VERDICT_INVALIDATED
-            verdict.dependency_epoch_snapshot = self._export_current_snapshot_json(dependencies)
-            verdict.adjudication_json = adjudication_json
-            verdict.epoch_fingerprint = _digest_label(
-                "CASCADIA-VERDICT-EPOCH-V1",
-                verdict.verdict_id,
-                int(verdict.epoch),
-                adjudication,
-                json.loads(verdict.dependency_epoch_snapshot),
-            )
-            # Invalidation cascades staleness downstream
-            self._cascade_staleness(verdict.verdict_id)
+            self._cascade_staleness(verdict_id)
         else:
             verdict.status = VERDICT_INDETERMINATE
-            verdict.adjudication_json = adjudication_json
-            verdict.epoch_fingerprint = _digest_label(
-                "CASCADIA-VERDICT-EPOCH-V1",
-                verdict.verdict_id,
-                int(verdict.epoch),
-                adjudication,
-                json.loads(verdict.dependency_epoch_snapshot),
-            )
-            self._cascade_staleness(verdict.verdict_id)
+            self._cascade_staleness(verdict_id)
 
+        verdict.epoch_fingerprint = _digest_label(
+            "CASCADIA-VERDICT-EPOCH-V1",
+            verdict.verdict_id,
+            int(verdict.epoch),
+            verdict.dependency_epoch_snapshot,
+            verdict.adjudication_json,
+        )
+
+        self._save_verdict(verdict)
         return self._verdict_export_json(verdict)
 
     # -------------------------------------------------------------------------
@@ -700,60 +695,63 @@ class Cascadia(gl.contract.Contract):
             return {"content_digest": digest, "semantic": validated_semantic}
 
         def validator_fn(leader_result: Any) -> bool:
-            if not isinstance(leader_result, gl.vm.Return):
-                return False
-            try:
-                leader_pkg = _validate_observation_package(leader_result.calldata)
-                validator_pkg = _validate_observation_package(observe())
-            except Exception:
-                return False
-            # Consensus assertion: exact agreement on the categorical mutation verdict
-            return leader_pkg["semantic"]["mutation"] == validator_pkg["semantic"]["mutation"]
+            validated = _validate_observation_package(leader_result)
+            candidate = observe()
+            # Consensus criteria: exact agreement on categorical mutation outcome
+            return candidate["semantic"]["mutation"] == validated["semantic"]["mutation"]
 
-        return _validate_observation_package(gl.vm.run_nondet(observe, validator_fn))
+        return gl.vm.run_nondet(
+            observe,
+            validator_fn,
+        )
 
     def _consensus_adjudicate_verdict(self, prompt: str, dependencies: list[str]) -> dict[str, Any]:
         """
-        Reaches multi-validator consensus over verdict adjudication against its dependency topology.
-        Validators enforce exact agreement on outcome enum and sorted affected dependency IDs.
+        Reaches multi-validator consensus over LLM causal reasoning.
+        Enforces agreement on categorical outcome and affected dependency sets while tolerating rationale variances.
         """
         def evaluate() -> dict[str, Any]:
             raw_model = gl.nondet.exec_prompt(prompt, response_format="json")
             return _validate_verdict_model_output(raw_model, dependencies)
 
         def validator_fn(leader_result: Any) -> bool:
-            if not isinstance(leader_result, gl.vm.Return):
-                return False
-            try:
-                leader_data = _validate_verdict_model_output(leader_result.calldata, dependencies)
-                validator_data = _validate_verdict_model_output(evaluate(), dependencies)
-            except Exception:
-                return False
-            # Consensus assertion: agreement on both the verdict outcome AND affected dependency IDs
+            validated = _validate_verdict_model_output(leader_result, dependencies)
+            candidate = evaluate()
             return (
-                leader_data["outcome"] == validator_data["outcome"]
-                and leader_data["affected_dependency_ids"] == validator_data["affected_dependency_ids"]
+                candidate["outcome"] == validated["outcome"]
+                and candidate["affected_dependency_ids"] == validated["affected_dependency_ids"]
             )
 
-        return _validate_verdict_model_output(
-            gl.vm.run_nondet(evaluate, validator_fn), dependencies
+        return gl.vm.run_nondet(
+            evaluate,
+            validator_fn,
         )
 
     # -------------------------------------------------------------------------
-    # Internal Topological & Invariant Algorithms
+    # Internal Storage & Record Persistence
     # -------------------------------------------------------------------------
 
+    def _save_anchor(self, anchor: AnchorRecord) -> None:
+        self.anchors[anchor.anchor_id] = anchor.to_json()
+
+    def _save_verdict(self, verdict: VerdictRecord) -> None:
+        self.verdicts[verdict.verdict_id] = verdict.to_json()
+
     def _load_anchor(self, anchor_id: str) -> AnchorRecord:
-        record = self.anchors.get(anchor_id, None)
-        if record is None:
+        if self.registry_kind.get(anchor_id, "") != "ANCHOR":
             raise gl.vm.UserError(f"Anchor '{anchor_id}' does not exist.")
-        return record
+        raw = self.anchors.get(anchor_id, "")
+        if not raw:
+            raise gl.vm.UserError(f"Anchor record for '{anchor_id}' is empty.")
+        return AnchorRecord.from_json(raw)
 
     def _load_verdict(self, verdict_id: str) -> VerdictRecord:
-        record = self.verdicts.get(verdict_id, None)
-        if record is None:
+        if self.registry_kind.get(verdict_id, "") != "VERDICT":
             raise gl.vm.UserError(f"Verdict '{verdict_id}' does not exist.")
-        return record
+        raw = self.verdicts.get(verdict_id, "")
+        if not raw:
+            raise gl.vm.UserError(f"Verdict record for '{verdict_id}' is empty.")
+        return VerdictRecord.from_json(raw)
 
     def _assert_node_exists(self, node_id: str) -> str:
         kind = self.registry_kind.get(node_id, "")
@@ -783,13 +781,13 @@ class Cascadia(gl.contract.Contract):
         deps.sort()
         self.downstream_dependents[node_id] = _canonical_json(deps)
 
-    def _get_index_entries(self, index: gl.storage.TreeMap[str, str], curator: str) -> list[str]:
+    def _get_index_entries(self, index: TreeMap[str, str], curator: str) -> list[str]:
         entries = json.loads(index.get(curator, "[]"))
         if not isinstance(entries, list):
             raise gl.vm.UserError("Corrupted curator index in storage.")
         return entries
 
-    def _append_to_index(self, index: gl.storage.TreeMap[str, str], curator: str, node_id: str) -> None:
+    def _append_to_index(self, index: TreeMap[str, str], curator: str, node_id: str) -> None:
         entries = self._get_index_entries(index, curator)
         if node_id in entries:
             raise gl.vm.UserError("Duplicate node registration in curator index.")
@@ -805,113 +803,105 @@ class Cascadia(gl.contract.Contract):
 
     def _assert_acyclic(self, candidate_id: str, dependencies: list[str]) -> None:
         """
-        Performs depth-first cycle traversal.
-        Guarantees that admitting the new verdict cannot create a directed topological cycle.
+        Enforces strict DAG acyclicity invariants prior to admitting new edges.
+        Walks upstream paths from dependencies using breadth-first traversal.
         """
+        queue: list[str] = list(dependencies)
         visited: list[str] = []
-        pending = list(dependencies)
-        nodes_traversed = 0
 
-        while pending:
-            curr = pending.pop()
+        while queue:
+            curr = queue.pop(0)
             if curr == candidate_id:
-                raise gl.vm.UserError("Topological cycle detected: a verdict cannot depend on its own descendants.")
+                raise gl.vm.UserError(f"Topological cycle detected: dependency path references '{candidate_id}'.")
             if curr in visited:
                 continue
             visited.append(curr)
-            nodes_traversed += 1
-            if nodes_traversed > MAX_CASCADE_NODES:
-                raise gl.vm.UserError("Cycle detection path length exceeded boundary ceiling.")
+
+            if len(visited) > MAX_CASCADE_NODES:
+                raise gl.vm.UserError("Cycle verification exceeded node safety limit.")
 
             if self.registry_kind.get(curr, "") == "VERDICT":
                 parent_verdict = self._load_verdict(curr)
-                pending.extend(self._get_verdict_dependencies(parent_verdict))
+                queue.extend(self._get_verdict_dependencies(parent_verdict))
 
     def _get_node_epoch(self, node_id: str) -> int:
-        kind = self._assert_node_exists(node_id)
-        if kind == "ANCHOR":
+        if self.registry_kind.get(node_id, "") == "ANCHOR":
             return int(self._load_anchor(node_id).epoch)
         return int(self._load_verdict(node_id).epoch)
 
     def _get_node_depth(self, node_id: str) -> int:
-        kind = self._assert_node_exists(node_id)
-        if kind == "ANCHOR":
+        if self.registry_kind.get(node_id, "") == "ANCHOR":
             return 0
         return int(self._load_verdict(node_id).topology_depth)
 
     def _export_current_snapshot_json(self, dependencies: list[str]) -> str:
-        snapshot: dict[str, int] = {}
-        for dep_id in dependencies:
-            snapshot[dep_id] = self._get_node_epoch(dep_id)
+        snapshot = {dep_id: self._get_node_epoch(dep_id) for dep_id in dependencies}
         return _canonical_json(snapshot)
 
     def _build_dependency_context(
-        self, dependencies: list[str], snapshot: dict[str, Any]
-    ) -> list[dict[str, Any]]:
-        context: list[dict[str, Any]] = []
+        self, dependencies: list[str]
+    ) -> str:
+        """Builds structured JSON payload documenting the current state of all dependencies."""
+        context: dict[str, Any] = {}
         for dep_id in dependencies:
             kind = self._assert_node_exists(dep_id)
             if kind == "ANCHOR":
                 anchor = self._load_anchor(dep_id)
-                context.append(
-                    {
-                        "id": dep_id,
-                        "kind": "ANCHOR",
-                        "status": anchor.status,
-                        "epoch": int(anchor.epoch),
-                        "snapshot_epoch": snapshot.get(dep_id),
-                        "content_digest": anchor.content_digest,
-                        "semantic": json.loads(anchor.semantic_snapshot) if anchor.semantic_snapshot else None,
-                    }
-                )
+                context[dep_id] = {
+                    "kind": "ANCHOR",
+                    "status": anchor.status,
+                    "hypothesis": anchor.tracked_hypothesis,
+                    "epoch": int(anchor.epoch),
+                    "semantic": json.loads(anchor.semantic_snapshot) if anchor.semantic_snapshot else None,
+                }
             else:
                 parent_verdict = self._load_verdict(dep_id)
-                context.append(
-                    {
-                        "id": dep_id,
-                        "kind": "VERDICT",
-                        "persisted_status": parent_verdict.status,
-                        "effective_status": self._resolve_effective_status(dep_id, [], 0),
-                        "epoch": int(parent_verdict.epoch),
-                        "snapshot_epoch": snapshot.get(dep_id),
-                        "adjudication": json.loads(parent_verdict.adjudication_json)
-                        if parent_verdict.adjudication_json
-                        else None,
-                    }
-                )
-        return context
+                context[dep_id] = {
+                    "kind": "VERDICT",
+                    "status": parent_verdict.status,
+                    "inquiry": parent_verdict.inquiry,
+                    "epoch": int(parent_verdict.epoch),
+                    "adjudication": json.loads(parent_verdict.adjudication_json) if parent_verdict.adjudication_json else None,
+                }
+        return _canonical_json(context)
 
     def _are_dependencies_healthy(self, dependencies: list[str]) -> bool:
-        """Checks if all dependencies are currently in active/valid state."""
+        """Returns True if all upstream direct dependencies are currently in a valid state."""
         for dep_id in dependencies:
-            kind = self._assert_node_exists(dep_id)
+            kind = self.registry_kind.get(dep_id, "")
             if kind == "ANCHOR":
                 if self._load_anchor(dep_id).status != ANCHOR_ACTIVE:
                     return False
-            elif self._resolve_effective_status(dep_id, [], 0) != VERDICT_VALID:
+            elif kind == "VERDICT":
+                if self._load_verdict(dep_id).status != VERDICT_VALID:
+                    return False
+            else:
                 return False
         return True
 
     def _resolve_effective_status(self, verdict_id: str, visited: list[str], depth: int) -> str:
         """
-        Recursively resolves effective health status without paying consensus or LLM overhead.
-        Detects if an upstream dependency has mutated or diverged from the recorded epoch snapshot.
+        Recursively walks upstream DAG paths to compute the effective health of a decision.
+        Returns VERDICT_VALID only if all ancestor paths terminate in active anchors without mutations.
         """
-        if depth > MAX_TOPOLOGY_DEPTH or verdict_id in visited:
-            return VERDICT_STALE
+        if verdict_id in visited:
+            return VERDICT_INDETERMINATE
+        if depth > MAX_TOPOLOGY_DEPTH:
+            return VERDICT_INDETERMINATE
+
         verdict = self._load_verdict(verdict_id)
         if verdict.status != VERDICT_VALID:
             return verdict.status
 
-        snapshot = json.loads(verdict.dependency_epoch_snapshot)
-        next_visited = visited + [verdict_id]
+        dependencies = self._get_verdict_dependencies(verdict)
+        next_visited = list(visited)
+        next_visited.append(verdict_id)
 
-        for dep_id in self._get_verdict_dependencies(verdict):
-            # Check epoch snapshot parity
-            if self._get_node_epoch(dep_id) != int(snapshot.get(dep_id, -1)):
-                return VERDICT_STALE
+        for dep_id in dependencies:
+            kind = self.registry_kind.get(dep_id, "")
+            if not kind:
+                return VERDICT_INDETERMINATE
 
-            kind = self._assert_node_exists(dep_id)
             if kind == "ANCHOR":
                 anchor_status = self._load_anchor(dep_id).status
                 if anchor_status == ANCHOR_DEGRADED:
@@ -949,9 +939,12 @@ class Cascadia(gl.contract.Contract):
                 raise gl.vm.UserError("Staleness cascade exceeded topology depth limit.")
 
             for dependent_id in self._get_dependents_list(current_id):
-                dependent_verdict = self._load_verdict(dependent_id)
-                dependent_verdict.status = VERDICT_STALE
-                queue.append((dependent_id, depth + 1))
+                if self.registry_kind.get(dependent_id, "") == "VERDICT":
+                    dependent_verdict = self._load_verdict(dependent_id)
+                    if dependent_verdict.status != VERDICT_STALE:
+                        dependent_verdict.status = VERDICT_STALE
+                        self._save_verdict(dependent_verdict)
+                    queue.append((dependent_id, depth + 1))
 
     def _degrade_anchor(self, anchor: AnchorRecord) -> None:
         """Marks an anchor degraded upon observation failure and propagates staleness."""
@@ -961,13 +954,15 @@ class Cascadia(gl.contract.Contract):
         }
         anchor.status = ANCHOR_DEGRADED
         anchor.semantic_snapshot = _canonical_json(semantic)
+        anchor.epoch = anchor.epoch + 1
         anchor.epoch_fingerprint = _digest_label(
             "CASCADIA-ANCHOR-EPOCH-V1",
             anchor.anchor_id,
             int(anchor.epoch),
             anchor.content_digest,
-            semantic,
+            anchor.semantic_snapshot,
         )
+        self._save_anchor(anchor)
         self._cascade_staleness(anchor.anchor_id)
 
     def _anchor_export_json(self, anchor: AnchorRecord) -> str:
