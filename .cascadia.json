@@ -1,0 +1,34 @@
+{
+  "name": "cascadia-protocol",
+  "version": "1.0.0",
+  "displayName": "CASCADIA Protocol",
+  "description": "Causal Autonomous Staleness Cascade & Automated Dependency Invalidation Architecture on GenLayer",
+  "contract": {
+    "entrypoint": "contracts/cascadia.py",
+    "runtime": "genlayer-intelligent-contract-v1",
+    "consensus": "optimistic-nondet-llm-v1",
+    "invariants": {
+      "maxNodes": 128,
+      "maxDepth": 32,
+      "maxFanout": 32,
+      "strictAcyclicity": true,
+      "genesisBaselinePinning": true
+    }
+  },
+  "networks": {
+    "studio-devnet": {
+      "chainId": 61999,
+      "rpcUrl": "https://studio.genlayer.com/api"
+    },
+    "local-devnet": {
+      "chainId": 61998,
+      "rpcUrl": "http://localhost:4000/api"
+    }
+  },
+  "contributor": {
+    "name": "9ja_maxx",
+    "github": "9ja-maxx",
+    "email": "297689616+9ja-maxx@users.noreply.github.com"
+  },
+  "license": "MIT"
+}
