@@ -1,0 +1,67 @@
+name: Cascadia CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-contract:
+    name: Intelligent Contract & Invariant Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Validate Contract Python AST
+        run: |
+          python3 -m py_compile contracts/cascadia.py
+          python3 -m py_compile tests/test_cascadia.py
+
+      - name: Run Topological Invariant Verifier
+        run: |
+          python3 scripts/validate_topology.py
+
+      - name: Run Scenario Simulation
+        run: |
+          python3 scripts/simulate_scenario.py
+
+      - name: Run Pytest Test Suite
+        run: |
+          pytest -v tests/
+
+  test-frontend:
+    name: Frontend Layout & Cascade Engine Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: ["18.x", "20.x"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Run Node.js Topology Tests
+        run: |
+          cd frontend
+          node --test test/topology.test.js
