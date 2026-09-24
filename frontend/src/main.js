@@ -18,7 +18,8 @@ import {
 const CONFIG = {
   contractAddress: localStorage.getItem("cascadia_contract") || "0x037d35F587555cAdE69840e19a1e1b58C65e4f7f",
   networkName: "GenLayer Studio Dev",
-  chainId: 61999
+  chainId: 61999,
+  rpcUrl: "https://studio-dev.genlayer.com/api"
 };
 
 const readClient = createClient({ chain: studioDevnet });
@@ -26,11 +27,11 @@ let writeClient = null;
 let userWallet = "";
 let selectedNodeId = null;
 let isSyncing = false;
-let activeModal = null;
-let actionFeedback = "";
+let activeModal = null; // null | "anchor" | "verdict" | "settings" | "wallet-help"
+let currentFilter = "all"; // "all" | "anchors" | "verdicts"
 let effectiveStatusResult = null;
 
-// 100% Live On-Chain State (Empty by default until synced from blockchain)
+// 100% Live On-Chain State (starts empty until synced from blockchain)
 let topologyNodes = [];
 let topologyEdges = [];
 
@@ -53,6 +54,33 @@ function rememberNodeId(id) {
 }
 
 // -----------------------------------------------------------------------------
+// Floating Toast Notification System
+// -----------------------------------------------------------------------------
+
+function showToast(message, type = "info") {
+  let container = document.getElementById("toast-container");
+  if (!container) {
+    container = document.createElement("div");
+    container.id = "toast-container";
+    container.className = "toast-container";
+    document.body.appendChild(container);
+  }
+
+  const toast = document.createElement("div");
+  toast.className = `toast ${type}`;
+  const icon = type === "success" ? "✓" : type === "error" ? "⚠" : type === "warning" ? "⚡" : "ℹ";
+  toast.innerHTML = `<span style="font-weight: 700;">${icon}</span><span>${message}</span>`;
+  container.appendChild(toast);
+
+  setTimeout(() => {
+    toast.style.opacity = "0";
+    toast.style.transform = "translateY(-8px) scale(0.96)";
+    toast.style.transition = "all 0.3s ease";
+    setTimeout(() => toast.remove(), 300);
+  }, 4500);
+}
+
+// -----------------------------------------------------------------------------
 // Core On-Chain Contract Communication
 // -----------------------------------------------------------------------------
 
@@ -61,24 +89,33 @@ async function executeRead(method, args = []) {
     return null;
   }
   try {
-    const raw = await readClient.readContract({
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`Timeout on ${method}`)), 7000)
+    );
+    const readPromise = readClient.readContract({
       address: CONFIG.contractAddress,
       functionName: method,
       args,
       jsonSafeReturn: true,
       transactionHashVariant: TransactionHashVariant.LATEST_NONFINAL
     });
+    const raw = await Promise.race([readPromise, timeoutPromise]);
     return typeof raw === "string" ? JSON.parse(raw) : raw;
   } catch (err) {
-    console.error(`Read failed on ${method}:`, err);
+    console.warn(`Read warning on ${method}:`, err?.message || err);
     return null;
   }
 }
 
 async function executeWrite(method, args) {
-  if (!writeClient) await connectWallet();
-  actionFeedback = `Submitting on-chain transaction: ${method}...`;
-  renderApp();
+  if (!writeClient) {
+    await connectWallet();
+  }
+  if (!writeClient) {
+    throw new Error("Wallet not connected. Please connect an EIP-1193 wallet first.");
+  }
+
+  showToast(`Broadcasting transaction: ${method}...`, "info");
 
   const txHash = await writeClient.writeContract({
     address: CONFIG.contractAddress,
@@ -87,8 +124,7 @@ async function executeWrite(method, args) {
     value: BigInt(0)
   });
 
-  actionFeedback = `Transaction broadcast (${txHash.slice(0, 10)}…). Awaiting validator consensus...`;
-  renderApp();
+  showToast(`Transaction broadcast (${txHash.slice(0, 10)}…). Waiting for validator consensus...`, "warning");
 
   const receipt = await readClient.waitForTransactionReceipt({
     hash: txHash,
@@ -100,22 +136,34 @@ async function executeWrite(method, args) {
     throw new Error(`Transaction reverted: ${receipt?.statusName || "CONSENSUS_REVERTED"}`);
   }
 
-  actionFeedback = `Transaction confirmed on-chain! Synced.`;
+  showToast(`Transaction confirmed on-chain!`, "success");
   await refreshOnChainState();
   return txHash;
 }
 
 async function connectWallet() {
-  if (!window.ethereum) throw new Error("No EIP-1193 browser wallet detected.");
-  const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
-  if (!accounts?.[0]) throw new Error("No account authorized.");
-  userWallet = accounts[0].toLowerCase();
-  writeClient = createClient({
-    chain: studioDevnet,
-    account: userWallet,
-    provider: window.ethereum
-  });
-  await refreshOnChainState();
+  if (!window.ethereum) {
+    activeModal = "wallet-help";
+    renderApp();
+    showToast("No EIP-1193 browser wallet detected.", "warning");
+    return;
+  }
+
+  try {
+    showToast("Requesting wallet authorization...", "info");
+    const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+    if (!accounts?.[0]) throw new Error("No account authorized by wallet.");
+    userWallet = accounts[0].toLowerCase();
+    writeClient = createClient({
+      chain: studioDevnet,
+      account: userWallet,
+      provider: window.ethereum
+    });
+    showToast(`Connected: ${userWallet.slice(0, 6)}…${userWallet.slice(-4)}`, "success");
+    await refreshOnChainState();
+  } catch (err) {
+    showToast(`Wallet connection error: ${err.message}`, "error");
+  }
 }
 
 async function refreshOnChainState() {
@@ -206,14 +254,24 @@ async function refreshOnChainState() {
 
 function renderApp() {
   const appEl = document.getElementById("app");
+  if (!appEl) return;
+
   const stats = computeTopologyStats(topologyNodes);
   const selectedNode = topologyNodes.find((n) => n.id === selectedNodeId) || null;
+
+  // Filter nodes if active
+  let displayNodes = topologyNodes;
+  if (currentFilter === "anchors") {
+    displayNodes = topologyNodes.filter((n) => n.kind === "ANCHOR");
+  } else if (currentFilter === "verdicts") {
+    displayNodes = topologyNodes.filter((n) => n.kind === "VERDICT");
+  }
 
   appEl.innerHTML = `
     <!-- Top Navigation -->
     <header class="topbar">
       <div class="brand-cluster">
-        <a class="brand-logo" href="#">
+        <a class="brand-logo" href="#" data-nav-view="all">
           <span class="brand-icon">C</span>
           CASCADIA
         </a>
@@ -224,15 +282,15 @@ function renderApp() {
       </div>
 
       <nav class="nav-links">
-        <a class="nav-item active" href="#">Topological Graph</a>
-        <a class="nav-item" href="#anchors">Anchors (${stats.anchors})</a>
-        <a class="nav-item" href="#verdicts">Verdicts (${stats.verdicts})</a>
+        <a class="nav-item ${currentFilter === 'all' ? 'active' : ''}" href="#" data-nav-view="all">Topological Graph</a>
+        <a class="nav-item ${currentFilter === 'anchors' ? 'active' : ''}" href="#" data-nav-view="anchors">Anchors (${stats.anchors})</a>
+        <a class="nav-item ${currentFilter === 'verdicts' ? 'active' : ''}" href="#" data-nav-view="verdicts">Verdicts (${stats.verdicts})</a>
       </nav>
 
       <div class="nav-cta-cluster">
-        <button class="btn btn-secondary" id="btn-anchor-modal">+ Anchor Truth</button>
-        <button class="btn btn-primary" id="btn-verdict-modal">+ Formulate Verdict</button>
-        <button class="btn btn-wallet" id="btn-wallet">
+        <button class="btn btn-secondary" id="btn-anchor-modal" type="button">+ Anchor Truth</button>
+        <button class="btn btn-primary" id="btn-verdict-modal" type="button">+ Formulate Verdict</button>
+        <button class="btn btn-wallet" id="btn-wallet" type="button">
           ${userWallet ? `${userWallet.slice(0, 6)}…${userWallet.slice(-4)}` : "Connect Wallet"}
         </button>
       </div>
@@ -280,11 +338,10 @@ function renderApp() {
           <span class="live-badge">LIVE ON-CHAIN</span>
           <span class="contract-address">Contract: <code>${CONFIG.contractAddress}</code></span>
           ${isSyncing ? `<span style="color: var(--cyan-bright); font-size: 0.8rem;">⟳ Syncing blockchain state...</span>` : ""}
-          ${actionFeedback ? `<span style="color: var(--emerald); font-size: 0.8rem; font-weight: 500;">${actionFeedback}</span>` : ""}
         </div>
         <div class="contract-actions">
-          <button class="btn btn-secondary btn-sm" id="btn-refresh-chain">⟳ Refresh State</button>
-          <button class="btn btn-secondary btn-sm" id="btn-config-contract">Settings</button>
+          <button class="btn btn-secondary btn-sm" id="btn-refresh-chain" type="button">⟳ Refresh State</button>
+          <button class="btn btn-secondary btn-sm" id="btn-config-contract" type="button">Settings</button>
         </div>
       </div>
 
@@ -295,12 +352,15 @@ function renderApp() {
             <div class="legend-item"><span class="legend-swatch emerald"></span> Active / Valid</div>
             <div class="legend-item"><span class="legend-swatch amber"></span> Mutated / Stale</div>
           </div>
+          ${currentFilter !== "all" ? `
+            <button class="btn btn-secondary btn-sm" data-nav-view="all" type="button">Show All Nodes</button>
+          ` : ""}
         </div>
 
         <div class="dag-canvas" id="dag-canvas">
-          ${topologyNodes.length === 0 ? renderEmptyState() : `
-            ${renderTopologySVG(topologyNodes, topologyEdges)}
-            ${renderTopologyNodeCards(topologyNodes)}
+          ${displayNodes.length === 0 ? renderEmptyState() : `
+            ${renderTopologySVG(displayNodes, topologyEdges)}
+            ${renderTopologyNodeCards(displayNodes)}
           `}
         </div>
       </div>
@@ -318,19 +378,19 @@ function renderApp() {
       <span>CASCADIA PROTOCOL • DEPLOYED AT ${CONFIG.contractAddress} • GENLAYER STUDIO DEV (CHAIN ID 61999)</span>
     </footer>
   `;
-
-  bindEvents();
 }
 
 function renderEmptyState() {
+  const isFiltered = currentFilter !== "all";
   return `
     <div class="empty-state-card">
       <div class="empty-state-icon">⚡</div>
-      <h3>No On-Chain Nodes Registered Yet</h3>
-      <p>Contract <code>${CONFIG.contractAddress}</code> is deployed and active on GenLayer Studio Dev. Register your first empirical anchor to establish real on-chain ground truth.</p>
+      <h3>${isFiltered ? `No ${currentFilter.toUpperCase()} Registered Yet` : "No On-Chain Nodes Registered Yet"}</h3>
+      <p>Contract <code>${CONFIG.contractAddress}</code> is active on GenLayer Studio Dev. Register your first empirical anchor to establish real on-chain ground truth.</p>
       <div class="empty-state-actions">
-        <button class="btn btn-primary" id="btn-empty-anchor">+ Register First Anchor</button>
-        ${!userWallet ? `<button class="btn btn-secondary" id="btn-empty-wallet">Connect Wallet</button>` : ""}
+        <button class="btn btn-primary" id="btn-empty-anchor" type="button">+ Register First Anchor</button>
+        ${!userWallet ? `<button class="btn btn-secondary" id="btn-empty-wallet" type="button">Connect Wallet</button>` : ""}
+        ${isFiltered ? `<button class="btn btn-secondary" data-nav-view="all" type="button">View All</button>` : ""}
       </div>
     </div>
   `;
@@ -396,7 +456,7 @@ function renderTelemetryDrawer(node) {
   return `
     <div class="drawer-header">
       <div class="drawer-title">${node.title || node.id}</div>
-      <button class="drawer-close" id="btn-close-drawer">✕</button>
+      <button class="drawer-close" id="btn-close-drawer" type="button" title="Close drawer">✕</button>
     </div>
 
     <div class="drawer-body">
@@ -478,14 +538,14 @@ function renderTelemetryDrawer(node) {
       <!-- Real On-Chain Action Operations -->
       <div class="drawer-actions">
         ${isAnchor ? `
-          <button class="btn btn-primary" id="btn-audit-anchor" style="width: 100%; margin-bottom: 0.5rem;">
+          <button class="btn btn-primary" id="btn-audit-anchor" type="button" style="width: 100%; margin-bottom: 0.5rem;">
             ⚡ Run On-Chain Web Observation (Audit)
           </button>
         ` : `
-          <button class="btn btn-primary" id="btn-adjudicate-verdict" style="width: 100%; margin-bottom: 0.5rem;">
+          <button class="btn btn-primary" id="btn-adjudicate-verdict" type="button" style="width: 100%; margin-bottom: 0.5rem;">
             ⚡ Run On-Chain LLM Consensus (Adjudicate)
           </button>
-          <button class="btn btn-secondary" id="btn-verify-effective" style="width: 100%; margin-bottom: 0.5rem;">
+          <button class="btn btn-secondary" id="btn-verify-effective" type="button" style="width: 100%; margin-bottom: 0.5rem;">
             🔍 Check Recursive Health (Zero Gas)
           </button>
         `}
@@ -499,23 +559,26 @@ function renderModals() {
 
   if (activeModal === "anchor") {
     return `
-      <div class="modal-backdrop" id="modal-backdrop">
+      <div class="modal-backdrop open" id="modal-backdrop">
         <div class="modal-dialog">
           <div class="modal-header">
             <div class="modal-title">Anchor Empirical Ground Truth</div>
-            <button class="modal-close" id="btn-modal-close">✕</button>
+            <button class="modal-close" id="btn-modal-close" type="button" title="Close">✕</button>
           </div>
           <form id="form-create-anchor" class="modal-body">
             <div class="form-group">
-              <label class="form-label">Anchor Identifier</label>
+              <div class="form-label-row">
+                <label class="form-label" for="inp-anchor-id">Anchor Identifier</label>
+                <button type="button" class="btn-quick-fill" id="btn-quick-fill-iana">Quick Fill: IANA Domains</button>
+              </div>
               <input type="text" class="form-input" id="inp-anchor-id" placeholder="e.g. anchor-compliance-iso" required />
             </div>
             <div class="form-group">
-              <label class="form-label">Observed Web Endpoint (HTTPS)</label>
+              <label class="form-label" for="inp-anchor-uri">Observed Web Endpoint (HTTPS)</label>
               <input type="url" class="form-input" id="inp-anchor-uri" placeholder="https://registry.example.org/cert.json" required />
             </div>
             <div class="form-group">
-              <label class="form-label">Tracked Empirical Hypothesis</label>
+              <label class="form-label" for="inp-anchor-hypothesis">Tracked Empirical Hypothesis</label>
               <textarea class="form-textarea" id="inp-anchor-hypothesis" rows="3" placeholder="State the exact factual claim that validators must continuously verify against the URL..." required></textarea>
             </div>
             <div class="modal-footer">
@@ -530,26 +593,33 @@ function renderModals() {
 
   if (activeModal === "verdict") {
     return `
-      <div class="modal-backdrop" id="modal-backdrop">
+      <div class="modal-backdrop open" id="modal-backdrop">
         <div class="modal-dialog">
           <div class="modal-header">
             <div class="modal-title">Establish Causal Verdict</div>
-            <button class="modal-close" id="btn-modal-close">✕</button>
+            <button class="modal-close" id="btn-modal-close" type="button" title="Close">✕</button>
           </div>
           <form id="form-create-verdict" class="modal-body">
             <div class="form-group">
-              <label class="form-label">Verdict Identifier</label>
+              <div class="form-label-row">
+                <label class="form-label" for="inp-verdict-id">Verdict Identifier</label>
+                <button type="button" class="btn-quick-fill" id="btn-quick-fill-verdict">Quick Fill: Procurement</button>
+              </div>
               <input type="text" class="form-input" id="inp-verdict-id" placeholder="e.g. verdict-credit-facility" required />
             </div>
             <div class="form-group">
-              <label class="form-label">Reasoned Inquiry</label>
+              <label class="form-label" for="inp-verdict-inquiry">Reasoned Inquiry</label>
               <textarea class="form-textarea" id="inp-verdict-inquiry" rows="3" placeholder="Specify the decision question to be evaluated by consensus validators..." required></textarea>
             </div>
             <div class="form-group">
               <label class="form-label">Upstream Dependencies (Select 1 or more)</label>
               <div class="dep-selector">
-                ${topologyNodes.length === 0 ? `<p style="color: var(--text-muted); font-size: 0.85rem;">No nodes registered yet. Register an Anchor first.</p>` : ""}
-                ${topologyNodes.map((n) => `
+                ${topologyNodes.length === 0 ? `
+                  <div class="dep-empty-hint">
+                    <p>No upstream nodes registered yet.</p>
+                    <button type="button" class="btn btn-secondary btn-sm" id="btn-switch-to-anchor" style="margin-top: 0.5rem;">+ Register Anchor First</button>
+                  </div>
+                ` : topologyNodes.map((n) => `
                   <label class="dep-checkbox-label">
                     <input type="checkbox" name="deps" value="${n.id}" />
                     <span><strong>${n.id}</strong> (${n.kind})</span>
@@ -569,20 +639,20 @@ function renderModals() {
 
   if (activeModal === "settings") {
     return `
-      <div class="modal-backdrop" id="modal-backdrop">
+      <div class="modal-backdrop open" id="modal-backdrop">
         <div class="modal-dialog">
           <div class="modal-header">
             <div class="modal-title">Protocol Contract Settings</div>
-            <button class="modal-close" id="btn-modal-close">✕</button>
+            <button class="modal-close" id="btn-modal-close" type="button" title="Close">✕</button>
           </div>
           <form id="form-settings" class="modal-body">
             <div class="form-group">
-              <label class="form-label">Intelligent Contract Address</label>
+              <label class="form-label" for="inp-settings-contract">Intelligent Contract Address</label>
               <input type="text" class="form-input" id="inp-settings-contract" value="${CONFIG.contractAddress}" required />
             </div>
             <div class="form-group">
               <label class="form-label">Network RPC</label>
-              <input type="text" class="form-input" value="https://studio-dev.genlayer.com/api" disabled />
+              <input type="text" class="form-input" value="${CONFIG.rpcUrl}" disabled />
             </div>
             <div class="modal-footer">
               <button type="button" class="btn btn-secondary" id="btn-modal-cancel">Cancel</button>
@@ -594,155 +664,273 @@ function renderModals() {
     `;
   }
 
+  if (activeModal === "wallet-help") {
+    return `
+      <div class="modal-backdrop open" id="modal-backdrop">
+        <div class="modal-dialog">
+          <div class="modal-header">
+            <div class="modal-title">Web3 Browser Wallet Required</div>
+            <button class="modal-close" id="btn-modal-close" type="button" title="Close">✕</button>
+          </div>
+          <div class="modal-body">
+            <p style="color: var(--text-secondary); margin-bottom: 1rem; line-height: 1.6;">
+              To submit on-chain transactions to GenLayer Studio Dev (registering anchors, formulating verdicts, or triggering audits), an EIP-1193 wallet is required.
+            </p>
+            <ul style="color: var(--text-primary); margin-left: 1.25rem; margin-bottom: 1.5rem; line-height: 1.8; font-size: 0.9rem;">
+              <li>Install <a href="https://metamask.io" target="_blank" rel="noopener" style="color: var(--cyan-bright);">MetaMask</a> or another Web3 browser extension.</li>
+              <li>Or use a Web3-native browser like Brave.</li>
+              <li>Read-only queries to the contract are already active without a wallet.</li>
+            </ul>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-primary" id="btn-modal-close">Understood</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   return "";
 }
 
 // -----------------------------------------------------------------------------
-// DOM Event Listeners & Interactive Handlers
+// Global Event Delegation & Interactivity
 // -----------------------------------------------------------------------------
 
-function bindEvents() {
-  document.getElementById("btn-wallet")?.addEventListener("click", () => {
-    connectWallet().catch((err) => alert(err.message));
-  });
-
-  document.getElementById("btn-empty-wallet")?.addEventListener("click", () => {
-    connectWallet().catch((err) => alert(err.message));
-  });
-
-  document.getElementById("btn-refresh-chain")?.addEventListener("click", () => {
-    refreshOnChainState().catch((err) => alert(err.message));
-  });
-
-  document.getElementById("btn-config-contract")?.addEventListener("click", () => {
-    activeModal = "settings";
-    renderApp();
-  });
-
-  document.getElementById("btn-anchor-modal")?.addEventListener("click", () => {
-    activeModal = "anchor";
-    renderApp();
-  });
-
-  document.getElementById("btn-empty-anchor")?.addEventListener("click", () => {
-    activeModal = "anchor";
-    renderApp();
-  });
-
-  document.getElementById("btn-verdict-modal")?.addEventListener("click", () => {
-    activeModal = "verdict";
-    renderApp();
-  });
-
-  document.getElementById("btn-modal-close")?.addEventListener("click", () => {
-    activeModal = null;
-    renderApp();
-  });
-
-  document.getElementById("btn-modal-cancel")?.addEventListener("click", () => {
-    activeModal = null;
-    renderApp();
-  });
-
-  document.getElementById("btn-close-drawer")?.addEventListener("click", () => {
-    selectedNodeId = null;
-    effectiveStatusResult = null;
-    renderApp();
-  });
-
-  // Node selection from canvas cards
-  document.querySelectorAll(".node-card").forEach((card) => {
-    card.addEventListener("click", () => {
-      selectedNodeId = card.getAttribute("data-node-id");
-      effectiveStatusResult = null;
+function setupEventDelegation() {
+  // Click Events
+  document.addEventListener("click", (e) => {
+    // Nav view filters
+    const navLink = e.target.closest("[data-nav-view]");
+    if (navLink) {
+      e.preventDefault();
+      currentFilter = navLink.getAttribute("data-nav-view") || "all";
       renderApp();
-    });
-  });
-
-  // Create Anchor Form
-  document.getElementById("form-create-anchor")?.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const id = document.getElementById("inp-anchor-id").value.trim();
-    const uri = document.getElementById("inp-anchor-uri").value.trim();
-    const hypothesis = document.getElementById("inp-anchor-hypothesis").value.trim();
-
-    try {
-      activeModal = null;
-      rememberNodeId(id);
-      await executeWrite("register_anchor", [id, uri, hypothesis]);
-    } catch (err) {
-      alert(`Anchor registration failed: ${err.message}`);
-    }
-  });
-
-  // Create Verdict Form
-  document.getElementById("form-create-verdict")?.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const id = document.getElementById("inp-verdict-id").value.trim();
-    const inquiry = document.getElementById("inp-verdict-inquiry").value.trim();
-    const checkboxes = document.querySelectorAll('input[name="deps"]:checked');
-    const dependencies = Array.from(checkboxes).map((cb) => cb.value);
-
-    if (dependencies.length === 0) {
-      alert("Please select at least one upstream dependency.");
       return;
     }
 
-    try {
-      activeModal = null;
-      rememberNodeId(id);
-      await executeWrite("establish_verdict", [id, inquiry, dependencies]);
-    } catch (err) {
-      alert(`Verdict establishment failed: ${err.message}`);
-    }
-  });
-
-  // Settings Form
-  document.getElementById("form-settings")?.addEventListener("submit", (e) => {
-    e.preventDefault();
-    const newAddress = document.getElementById("inp-settings-contract").value.trim();
-    if (newAddress) {
-      CONFIG.contractAddress = newAddress;
-      localStorage.setItem("cascadia_contract", newAddress);
-      activeModal = null;
-      refreshOnChainState().catch(console.error);
-    }
-  });
-
-  // Action: Audit Anchor On-Chain
-  document.getElementById("btn-audit-anchor")?.addEventListener("click", async () => {
-    if (!selectedNodeId) return;
-    try {
-      await executeWrite("audit_anchor", [selectedNodeId]);
-    } catch (err) {
-      alert(`Audit transaction failed: ${err.message}`);
-    }
-  });
-
-  // Action: Adjudicate Verdict On-Chain
-  document.getElementById("btn-adjudicate-verdict")?.addEventListener("click", async () => {
-    if (!selectedNodeId) return;
-    try {
-      await executeWrite("adjudicate_verdict", [selectedNodeId]);
-    } catch (err) {
-      alert(`Adjudication transaction failed: ${err.message}`);
-    }
-  });
-
-  // Action: Verify Effective Status (Zero-Gas Read)
-  document.getElementById("btn-verify-effective")?.addEventListener("click", async () => {
-    if (!selectedNodeId) return;
-    try {
-      const result = await executeRead("evaluate_effective_verdict", [selectedNodeId]);
-      effectiveStatusResult = result || "Unknown";
+    // Anchor Modal triggers
+    if (e.target.closest("#btn-anchor-modal, #btn-empty-anchor")) {
+      activeModal = "anchor";
       renderApp();
-    } catch (err) {
-      alert(`Verification call failed: ${err.message}`);
+      return;
+    }
+
+    // Verdict Modal trigger
+    if (e.target.closest("#btn-verdict-modal")) {
+      activeModal = "verdict";
+      renderApp();
+      return;
+    }
+
+    // Switch from verdict modal to anchor
+    if (e.target.closest("#btn-switch-to-anchor")) {
+      activeModal = "anchor";
+      renderApp();
+      return;
+    }
+
+    // Settings Modal trigger
+    if (e.target.closest("#btn-config-contract")) {
+      activeModal = "settings";
+      renderApp();
+      return;
+    }
+
+    // Modal Close & Cancel
+    if (e.target.closest("#btn-modal-close, #btn-modal-cancel")) {
+      activeModal = null;
+      renderApp();
+      return;
+    }
+
+    // Backdrop click to close modal
+    if (e.target.id === "modal-backdrop") {
+      activeModal = null;
+      renderApp();
+      return;
+    }
+
+    // Drawer Close
+    if (e.target.closest("#btn-close-drawer")) {
+      selectedNodeId = null;
+      effectiveStatusResult = null;
+      renderApp();
+      return;
+    }
+
+    // Wallet Connect
+    if (e.target.closest("#btn-wallet, #btn-empty-wallet")) {
+      connectWallet();
+      return;
+    }
+
+    // Refresh State
+    if (e.target.closest("#btn-refresh-chain")) {
+      showToast("Fetching live on-chain state from GenLayer...", "info");
+      refreshOnChainState().catch((err) => showToast(err.message, "error"));
+      return;
+    }
+
+    // Node Card Selection
+    const nodeCard = e.target.closest(".node-card");
+    if (nodeCard) {
+      selectedNodeId = nodeCard.getAttribute("data-node-id");
+      effectiveStatusResult = null;
+      renderApp();
+      return;
+    }
+
+    // Quick Fill: IANA Anchor
+    if (e.target.closest("#btn-quick-fill-iana")) {
+      const inpId = document.getElementById("inp-anchor-id");
+      const inpUri = document.getElementById("inp-anchor-uri");
+      const inpHyp = document.getElementById("inp-anchor-hypothesis");
+      if (inpId && inpUri && inpHyp) {
+        inpId.value = `anchor-iana-${Math.floor(Date.now() / 1000)}`;
+        inpUri.value = "https://www.iana.org/help/example-domains";
+        inpHyp.value = "IANA maintains example domains such as example.com and example.org for documentation purposes.";
+      }
+      return;
+    }
+
+    // Quick Fill: Verdict
+    if (e.target.closest("#btn-quick-fill-verdict")) {
+      const inpId = document.getElementById("inp-verdict-id");
+      const inpInq = document.getElementById("inp-verdict-inquiry");
+      if (inpId && inpInq) {
+        inpId.value = `verdict-auth-${Math.floor(Date.now() / 1000)}`;
+        inpInq.value = "Is downstream procurement authorized based on verified upstream compliance status?";
+      }
+      return;
+    }
+
+    // Action: Audit Anchor On-Chain
+    if (e.target.closest("#btn-audit-anchor")) {
+      if (!selectedNodeId) return;
+      executeWrite("audit_anchor", [selectedNodeId]).catch((err) => {
+        showToast(`Audit failed: ${err.message}`, "error");
+      });
+      return;
+    }
+
+    // Action: Adjudicate Verdict On-Chain
+    if (e.target.closest("#btn-adjudicate-verdict")) {
+      if (!selectedNodeId) return;
+      executeWrite("adjudicate_verdict", [selectedNodeId]).catch((err) => {
+        showToast(`Adjudication failed: ${err.message}`, "error");
+      });
+      return;
+    }
+
+    // Action: Verify Effective Status (Zero-Gas Read)
+    if (e.target.closest("#btn-verify-effective")) {
+      if (!selectedNodeId) return;
+      showToast("Querying recursive status on-chain...", "info");
+      executeRead("evaluate_effective_verdict", [selectedNodeId])
+        .then((res) => {
+          effectiveStatusResult = res || "VERDICT_VALID";
+          renderApp();
+          showToast(`Recursive status: ${effectiveStatusResult}`, "success");
+        })
+        .catch((err) => {
+          showToast(`Verification call failed: ${err.message}`, "error");
+        });
+      return;
+    }
+  });
+
+  // Submit Events (Forms)
+  document.addEventListener("submit", async (e) => {
+    // Create Anchor Form
+    if (e.target.id === "form-create-anchor") {
+      e.preventDefault();
+      const id = document.getElementById("inp-anchor-id")?.value.trim();
+      const uri = document.getElementById("inp-anchor-uri")?.value.trim();
+      const hypothesis = document.getElementById("inp-anchor-hypothesis")?.value.trim();
+
+      if (!id || !uri || !hypothesis) {
+        showToast("Please fill in all anchor fields.", "warning");
+        return;
+      }
+
+      try {
+        activeModal = null;
+        rememberNodeId(id);
+        renderApp();
+        await executeWrite("register_anchor", [id, uri, hypothesis]);
+      } catch (err) {
+        showToast(`Anchor registration failed: ${err.message}`, "error");
+      }
+      return;
+    }
+
+    // Create Verdict Form
+    if (e.target.id === "form-create-verdict") {
+      e.preventDefault();
+      const id = document.getElementById("inp-verdict-id")?.value.trim();
+      const inquiry = document.getElementById("inp-verdict-inquiry")?.value.trim();
+      const checkboxes = document.querySelectorAll('input[name="deps"]:checked');
+      const dependencies = Array.from(checkboxes).map((cb) => cb.value);
+
+      if (!id || !inquiry) {
+        showToast("Please fill in verdict ID and inquiry.", "warning");
+        return;
+      }
+
+      if (dependencies.length === 0) {
+        showToast("Please select at least one upstream dependency.", "warning");
+        return;
+      }
+
+      try {
+        activeModal = null;
+        rememberNodeId(id);
+        renderApp();
+        await executeWrite("establish_verdict", [id, inquiry, dependencies]);
+      } catch (err) {
+        showToast(`Verdict establishment failed: ${err.message}`, "error");
+      }
+      return;
+    }
+
+    // Settings Form
+    if (e.target.id === "form-settings") {
+      e.preventDefault();
+      const newAddress = document.getElementById("inp-settings-contract")?.value.trim();
+      if (newAddress) {
+        CONFIG.contractAddress = newAddress;
+        localStorage.setItem("cascadia_contract", newAddress);
+        activeModal = null;
+        showToast("Contract settings updated.", "success");
+        refreshOnChainState().catch(console.error);
+      }
+      return;
+    }
+  });
+
+  // Keyboard navigation (Escape to close modals/drawers)
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      if (activeModal) {
+        activeModal = null;
+        renderApp();
+      } else if (selectedNodeId) {
+        selectedNodeId = null;
+        effectiveStatusResult = null;
+        renderApp();
+      }
     }
   });
 }
 
-// Initial Bootstrapping: Auto-sync on-chain state on page load
+// -----------------------------------------------------------------------------
+// Bootstrapping
+// -----------------------------------------------------------------------------
+
+setupEventDelegation();
+renderApp();
+
 refreshOnChainState().catch((err) => {
   console.log("Initial on-chain sync notice:", err);
   renderApp();
