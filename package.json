@@ -1,0 +1,11 @@
+{
+  "name": "cascadia-protocol",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CASCADIA Protocol — Autonomous Decision Topology & Staleness Cascades on GenLayer",
+  "scripts": {
+    "build": "cd frontend && npm install && npm run build",
+    "dev": "cd frontend && npm run dev",
+    "test:ui": "cd frontend && node --test test/*.test.js"
+  }
+}
