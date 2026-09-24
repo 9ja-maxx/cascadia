@@ -10,7 +10,7 @@ import { calculateNodePositions, generateBezierPath, simulateCascade, computeTop
 
 // Configurable deployment parameters (updated once deployed on Studio Dev / StudioNet)
 const CONFIG = {
-  contractAddress: localStorage.getItem("cascadia_contract") || "0x0000000000000000000000000000000000000000",
+  contractAddress: localStorage.getItem("cascadia_contract") || "0x037d35F587555cAdE69840e19a1e1b58C65e4f7f",
   networkName: "GenLayer Studio Dev",
   chainId: 61999
 };
