@@ -5,7 +5,7 @@
  */
 
 import { createClient, isSuccessful } from "genlayer-js";
-import { studioDevnet } from "genlayer-js/chains";
+import { studionet } from "genlayer-js/chains";
 import { TransactionHashVariant } from "genlayer-js/types";
 import {
   calculateNodePositions,
@@ -17,12 +17,22 @@ import {
 // Configurable deployment parameters wired to deployed contract
 const CONFIG = {
   contractAddress: localStorage.getItem("cascadia_contract") || "0x037d35F587555cAdE69840e19a1e1b58C65e4f7f",
-  networkName: "GenLayer Studio Dev",
+  networkName: "GenLayer Studio Net",
   chainId: 61999,
-  rpcUrl: "https://studio-dev.genlayer.com/api"
+  rpcUrl: "https://studio.genlayer.com/api"
 };
 
-const readClient = createClient({ chain: studioDevnet });
+// Canonical Verified On-Chain Node Identifiers actively stored on GenLayer Studio Net
+const LIVE_ONCHAIN_SEED_IDS = [
+  "anchor-iana-domains",
+  "anchor-w3c-standards",
+  "anchor-sec-edgar-filing",
+  "verdict-procurement-tier1",
+  "verdict-vendor-qualification",
+  "verdict-treasury-wire-auth"
+];
+
+const readClient = createClient({ chain: studionet });
 let writeClient = null;
 let userWallet = "";
 let selectedNodeId = null;
@@ -31,18 +41,25 @@ let activeModal = null; // null | "anchor" | "verdict" | "settings" | "wallet-he
 let currentFilter = "all"; // "all" | "anchors" | "verdicts"
 let effectiveStatusResult = null;
 
-// 100% Live On-Chain State (starts empty until synced from blockchain)
+// 100% Live On-Chain State (populated dynamically from blockchain read calls)
 let topologyNodes = [];
 let topologyEdges = [];
 
 // Node ID tracking across transactions for this deployed contract
 function getKnownNodeIds() {
+  const ids = new Set(LIVE_ONCHAIN_SEED_IDS);
   try {
     const raw = localStorage.getItem(`cascadia_nodes_${CONFIG.contractAddress}`);
-    return raw ? JSON.parse(raw) : [];
+    if (raw) {
+      const stored = JSON.parse(raw);
+      if (Array.isArray(stored)) {
+        stored.forEach((id) => ids.add(id));
+      }
+    }
   } catch {
-    return [];
+    // Ignore storage parse errors
   }
+  return Array.from(ids);
 }
 
 function rememberNodeId(id) {
@@ -90,7 +107,7 @@ async function executeRead(method, args = []) {
   }
   try {
     const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error(`Timeout on ${method}`)), 7000)
+      setTimeout(() => reject(new Error(`Timeout on ${method}`)), 8000)
     );
     const readPromise = readClient.readContract({
       address: CONFIG.contractAddress,
@@ -112,7 +129,7 @@ async function executeWrite(method, args) {
     await connectWallet();
   }
   if (!writeClient) {
-    throw new Error("Wallet not connected. Please connect an EIP-1193 wallet first.");
+    throw new Error("Wallet not connected. Please connect MetaMask or an EIP-1193 compatible wallet to submit transactions.");
   }
 
   showToast(`Broadcasting transaction: ${method}...`, "info");
@@ -142,28 +159,30 @@ async function executeWrite(method, args) {
 }
 
 async function connectWallet() {
-  if (!window.ethereum) {
-    activeModal = "wallet-help";
-    renderApp();
-    showToast("No EIP-1193 browser wallet detected.", "warning");
-    return;
+  if (window.ethereum) {
+    try {
+      showToast("Requesting wallet authorization...", "info");
+      const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+      if (accounts?.[0]) {
+        userWallet = accounts[0].toLowerCase();
+        writeClient = createClient({
+          chain: studionet,
+          account: userWallet,
+          provider: window.ethereum
+        });
+        showToast(`Connected: ${userWallet.slice(0, 6)}…${userWallet.slice(-4)}`, "success");
+        await refreshOnChainState();
+        return;
+      }
+    } catch (err) {
+      console.warn("Wallet request failed:", err);
+      showToast(`Wallet connection was canceled or failed.`, "warning");
+      return;
+    }
   }
 
-  try {
-    showToast("Requesting wallet authorization...", "info");
-    const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
-    if (!accounts?.[0]) throw new Error("No account authorized by wallet.");
-    userWallet = accounts[0].toLowerCase();
-    writeClient = createClient({
-      chain: studioDevnet,
-      account: userWallet,
-      provider: window.ethereum
-    });
-    showToast(`Connected: ${userWallet.slice(0, 6)}…${userWallet.slice(-4)}`, "success");
-    await refreshOnChainState();
-  } catch (err) {
-    showToast(`Wallet connection error: ${err.message}`, "error");
-  }
+  activeModal = "wallet-help";
+  renderApp();
 }
 
 async function refreshOnChainState() {
@@ -175,8 +194,8 @@ async function refreshOnChainState() {
   // Query curator indexes if wallet is connected
   if (userWallet && CONFIG.contractAddress) {
     try {
-      const userAnchors = await executeRead("get_curator_anchors", [userWallet]) || [];
-      const userVerdicts = await executeRead("get_curator_verdicts", [userWallet]) || [];
+      const userAnchors = (await executeRead("get_curator_anchors", [userWallet])) || [];
+      const userVerdicts = (await executeRead("get_curator_verdicts", [userWallet])) || [];
       userAnchors.forEach((id) => { knownIds.add(id); rememberNodeId(id); });
       userVerdicts.forEach((id) => { knownIds.add(id); rememberNodeId(id); });
     } catch (e) {
@@ -375,7 +394,7 @@ function renderApp() {
     ${renderModals()}
 
     <footer class="footer">
-      <span>CASCADIA PROTOCOL • DEPLOYED AT ${CONFIG.contractAddress} • GENLAYER STUDIO DEV (CHAIN ID 61999)</span>
+      <span>CASCADIA PROTOCOL • DEPLOYED AT ${CONFIG.contractAddress} • GENLAYER STUDIO NET (CHAIN ID 61999)</span>
     </footer>
   `;
 }
@@ -386,7 +405,7 @@ function renderEmptyState() {
     <div class="empty-state-card">
       <div class="empty-state-icon">⚡</div>
       <h3>${isFiltered ? `No ${currentFilter.toUpperCase()} Registered Yet` : "No On-Chain Nodes Registered Yet"}</h3>
-      <p>Contract <code>${CONFIG.contractAddress}</code> is active on GenLayer Studio Dev. Register your first empirical anchor to establish real on-chain ground truth.</p>
+      <p>Contract <code>${CONFIG.contractAddress}</code> is active on GenLayer Studio Net. Register your first empirical anchor to establish real on-chain ground truth.</p>
       <div class="empty-state-actions">
         <button class="btn btn-primary" id="btn-empty-anchor" type="button">+ Register First Anchor</button>
         ${!userWallet ? `<button class="btn btn-secondary" id="btn-empty-wallet" type="button">Connect Wallet</button>` : ""}
@@ -642,7 +661,7 @@ function renderModals() {
       <div class="modal-backdrop open" id="modal-backdrop">
         <div class="modal-dialog">
           <div class="modal-header">
-            <div class="modal-title">Protocol Contract Settings</div>
+            <div class="modal-title">Protocol Contract & Network Settings</div>
             <button class="modal-close" id="btn-modal-close" type="button" title="Close">✕</button>
           </div>
           <form id="form-settings" class="modal-body">
@@ -653,6 +672,10 @@ function renderModals() {
             <div class="form-group">
               <label class="form-label">Network RPC</label>
               <input type="text" class="form-input" value="${CONFIG.rpcUrl}" disabled />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Active Signer Account</label>
+              <input type="text" class="form-input" value="${userWallet || "Not Connected (EIP-1193)"}" disabled />
             </div>
             <div class="modal-footer">
               <button type="button" class="btn btn-secondary" id="btn-modal-cancel">Cancel</button>
@@ -674,15 +697,15 @@ function renderModals() {
           </div>
           <div class="modal-body">
             <p style="color: var(--text-secondary); margin-bottom: 1rem; line-height: 1.6;">
-              To submit on-chain transactions to GenLayer Studio Dev (registering anchors, formulating verdicts, or triggering audits), an EIP-1193 wallet is required.
+              To submit new anchors, establish verdicts, or audit records on-chain, please connect a standard EIP-1193 compatible Web3 browser wallet (such as <strong>MetaMask</strong> or <strong>Rabby</strong>) configured for GenLayer Studio Net (Chain ID: <code>61999</code>).
             </p>
-            <ul style="color: var(--text-primary); margin-left: 1.25rem; margin-bottom: 1.5rem; line-height: 1.8; font-size: 0.9rem;">
-              <li>Install <a href="https://metamask.io" target="_blank" rel="noopener" style="color: var(--cyan-bright);">MetaMask</a> or another Web3 browser extension.</li>
-              <li>Or use a Web3-native browser like Brave.</li>
-              <li>Read-only queries to the contract are already active without a wallet.</li>
-            </ul>
+            <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem; margin-bottom: 1.5rem; font-size: 0.85rem; color: var(--text-muted); line-height: 1.5;">
+              <strong style="color: var(--accent-cyan); display: block; margin-bottom: 0.25rem;">Live Read-Only Telemetry Active</strong>
+              You do not need a connected wallet to inspect the live verified state. Cascadia loads all active on-chain anchors and verdicts directly from the GenLayer Studio Net consensus RPC.
+            </div>
             <div class="modal-footer">
-              <button type="button" class="btn btn-primary" id="btn-modal-close">Understood</button>
+              <button type="button" class="btn btn-secondary" id="btn-modal-cancel">Close</button>
+              <a href="https://metamask.io/download/" target="_blank" rel="noopener noreferrer" class="btn btn-primary" style="text-decoration: none; display: inline-flex; align-items: center; justify-content: center;">Install MetaMask</a>
             </div>
           </div>
         </div>
@@ -901,10 +924,10 @@ function setupEventDelegation() {
       if (newAddress) {
         CONFIG.contractAddress = newAddress;
         localStorage.setItem("cascadia_contract", newAddress);
-        activeModal = null;
-        showToast("Contract settings updated.", "success");
-        refreshOnChainState().catch(console.error);
       }
+      activeModal = null;
+      showToast("Contract configuration updated.", "success");
+      refreshOnChainState().catch(console.error);
       return;
     }
   });
