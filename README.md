@@ -168,7 +168,8 @@ cascadia/
 │       └── topology.test.js     # Node.js unit tests for layout math
 ├── scripts/
 │   ├── validate_topology.py     # Independent DAG acyclicity and bound verifier
-│   └── deploy_cascadia.py       # Contract deployment and RPC manifest utility
+│   ├── deploy_cascadia.py       # Contract deployment and RPC manifest utility
+│   └── populate_txns.cjs        # Live on-chain topology population utility
 ├── tests/
 │   ├── conftest.py              # Test harness and GenLayer calldata test fixtures
 │   └── test_cascadia.py         # Pytest suite covering all contract invariants
@@ -202,7 +203,13 @@ node --test test/topology.test.js
 python3 scripts/validate_topology.py
 ```
 
-### 4. Launch Executive Frontend Locally
+### 4. Run On-Chain Topology Population Script
+```bash
+# Connects to GenLayer Studio Net and populates live Anchors & Verdicts
+PRIVATE_KEY=0x... node scripts/populate_txns.cjs
+```
+
+### 5. Launch Executive Frontend Locally
 ```bash
 cd frontend
 npm install

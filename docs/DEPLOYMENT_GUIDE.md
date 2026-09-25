@@ -140,3 +140,9 @@ To run topological acyclicity validation:
 python3 scripts/validate_topology.py
 ```
 
+To populate or verify live on-chain anchors and verdicts:
+```bash
+PRIVATE_KEY=0x... node scripts/populate_txns.cjs
+```
+
+
