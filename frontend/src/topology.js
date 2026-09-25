@@ -69,7 +69,7 @@ export function computeTopologyStats(nodes) {
     nodes.forEach((n) => {
       if (n.kind === "ANCHOR") {
         anchors++;
-        if (n.status === "ANCHOR_ACTIVE") activeAnchors++;
+        if (n.status === "ANCHOR_ACTIVE" || n.status === "ANCHOR_GENESIS") activeAnchors++;
         if (n.status === "ANCHOR_MUTATED" || n.status === "ANCHOR_DEGRADED") staleCount++;
       } else {
         verdicts++;
