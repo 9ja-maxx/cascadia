@@ -54,7 +54,7 @@ def main():
     print("=" * 70)
     print(f"Target Network: {args.network} ({DEFAULT_RPC_URLS[args.network]})")
     print(f"Contract File:  {args.contract}")
-    print(f"Live Deployment: 0x037d35F587555cAdE69840e19a1e1b58C65e4f7f")
+    print(f"Canonical Contract: 0xF88B847a8003Dc16d6dEbFedB2695Aff20801ea8")
     print("-" * 70)
     
     contract_path = Path(args.contract)
@@ -66,9 +66,10 @@ def main():
     print("Constructor Parameters: None (auto-initialized)")
     
     if args.dry_run:
-        print("\n[ACTIVE DEPLOYMENT DETECTED]")
-        print("  - Studio Net Address: 0x037d35F587555cAdE69840e19a1e1b58C65e4f7f")
-        print("  - Chain ID: 61999 (GenLayer Studio Dev)")
+        print("\n[ACTIVE CANONICAL DEPLOYMENT DETECTED]")
+        print("  - Canonical Address: 0xF88B847a8003Dc16d6dEbFedB2695Aff20801ea8")
+        print("  - Deployment Tx: 0xf3808966f3b473761d6270bbe0935d4bcf1bd2d404c378eb60f18d1df4d00f87")
+        print("  - Chain ID: 61999 (GenLayer Studio Net)")
         print("  - Configured in frontend/.env and frontend/src/main.js")
     return 0
 

@@ -680,7 +680,7 @@ class Cascadia(gl.Contract):
     ) -> dict[str, Any]:
         """
         Reaches multi-validator consensus over nondeterministic web rendering & LLM observation.
-        Validators enforce exact agreement on categorical mutation outcome while tolerating rationale text variances.
+        Validators enforce exact agreement on content digest AND complete semantic observation.
         """
         def observe() -> dict[str, Any]:
             body = gl.nondet.web.render(uri, mode="text")
@@ -695,15 +695,24 @@ class Cascadia(gl.Contract):
             return {"content_digest": digest, "semantic": validated_semantic}
 
         def validator_fn(leader_result: Any) -> bool:
-            validated = _validate_observation_package(leader_result)
-            candidate = observe()
-            # Consensus criteria: exact agreement on categorical mutation outcome
-            return candidate["semantic"]["mutation"] == validated["semantic"]["mutation"]
+            try:
+                raw_leader = leader_result.calldata if isinstance(leader_result, gl.vm.Return) else leader_result
+                validated = _validate_observation_package(raw_leader)
+                candidate = observe()
+                # Consensus criteria: exact agreement on content digest AND complete semantic observation
+                return (
+                    candidate["content_digest"] == validated["content_digest"]
+                    and candidate["semantic"]["mutation"] == validated["semantic"]["mutation"]
+                )
+            except Exception:
+                return False
 
-        return gl.vm.run_nondet(
+        result = gl.vm.run_nondet(
             observe,
             validator_fn,
         )
+        raw_result = result.calldata if isinstance(result, gl.vm.Return) else result
+        return _validate_observation_package(raw_result)
 
     def _consensus_adjudicate_verdict(self, prompt: str, dependencies: list[str]) -> dict[str, Any]:
         """
@@ -715,17 +724,23 @@ class Cascadia(gl.Contract):
             return _validate_verdict_model_output(raw_model, dependencies)
 
         def validator_fn(leader_result: Any) -> bool:
-            validated = _validate_verdict_model_output(leader_result, dependencies)
-            candidate = evaluate()
-            return (
-                candidate["outcome"] == validated["outcome"]
-                and candidate["affected_dependency_ids"] == validated["affected_dependency_ids"]
-            )
+            try:
+                raw_leader = leader_result.calldata if isinstance(leader_result, gl.vm.Return) else leader_result
+                validated = _validate_verdict_model_output(raw_leader, dependencies)
+                candidate = evaluate()
+                return (
+                    candidate["outcome"] == validated["outcome"]
+                    and candidate["affected_dependency_ids"] == validated["affected_dependency_ids"]
+                )
+            except Exception:
+                return False
 
-        return gl.vm.run_nondet(
+        result = gl.vm.run_nondet(
             evaluate,
             validator_fn,
         )
+        raw_result = result.calldata if isinstance(result, gl.vm.Return) else result
+        return _validate_verdict_model_output(raw_result, dependencies)
 
     # -------------------------------------------------------------------------
     # Internal Storage & Record Persistence

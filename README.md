@@ -230,11 +230,13 @@ Or import `https://github.com/9ja-maxx/cascadia` directly on [Vercel](https://ve
 
 | Parameter | Value |
 | :--- | :--- |
-| **Contract Address** | `0x037d35F587555cAdE69840e19a1e1b58C65e4f7f` |
-| **Network** | GenLayer Studio Dev / StudioNet |
+| **Canonical Contract Address** | `0xF88B847a8003Dc16d6dEbFedB2695Aff20801ea8` |
+| **Deployment Transaction** | `0xf3808966f3b473761d6270bbe0935d4bcf1bd2d404c378eb60f18d1df4d00f87` |
+| **Network** | GenLayer Studio Net |
 | **Chain ID** | `61999` |
-| **Studio IDE** | [https://studio.genlayer.com](https://studio.genlayer.com) |
-| **Status** | Active & Initialized |
+| **Studio RPC** | `https://studio.genlayer.com/api` |
+| **Consensus Binding** | Exact match on SHA-256 `content_digest` + categorical semantic observation |
+| **Status** | Active, Initialized & Multi-Hop Consensus Verified |
 
 ---
 

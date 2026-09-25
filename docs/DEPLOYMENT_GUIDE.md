@@ -33,27 +33,24 @@ GenLayer Intelligent Contracts execute non-deterministic consensus algorithms us
 2. The constructor arguments default to empty (`[]`).
 3. Click **Deploy Contract**.
 4. Confirm the transaction in your connected wallet.
-5. The contract is deployed to Studio Dev / StudioNet:
-   - **Live Contract Address:** `0x037d35F587555cAdE69840e19a1e1b58C65e4f7f`
-   - **Target Network:** GenLayer Studio Dev (Chain ID: `61999`)
-   - **Explorer / Verification:** Verified via GenLayer Studio
+5. The contract is deployed to GenLayer Studio Net:
+   - **Live Canonical Address:** `0xF88B847a8003Dc16d6dEbFedB2695Aff20801ea8`
+   - **Deployment Transaction:** `0xf3808966f3b473761d6270bbe0935d4bcf1bd2d404c378eb60f18d1df4d00f87`
+   - **Target Network:** GenLayer Studio Net (Chain ID: `61999`)
+   - **Explorer / Verification:** Verified via GenLayer Studio Net RPC
 
 ---
 
 ## 3. Configuring the Executive Observability Frontend
 
-The frontend provides real-time SVG topological graph visualization, interactive node inspection, and direct on-chain transaction execution against GenLayer Studio Dev.
+The frontend provides real-time SVG topological graph visualization, interactive node inspection, and direct on-chain transaction execution against GenLayer Studio Net.
 
 ### Step 1: Configure Environment
 1. Navigate to the `frontend/` directory:
    ```bash
    cd frontend
    ```
-2. Copy the sample environment file (or configure directly in browser settings):
-   ```bash
-   echo "VITE_CASCADIA_CONTRACT_ADDRESS=0xYourDeployedContractAddress" > .env.local
-   ```
-   *(Alternatively, you can paste the contract address directly into the UI header Settings modal at runtime).*
+2. The frontend binds to canonical contract `0xF88B847a8003Dc16d6dEbFedB2695Aff20801ea8` automatically.
 
 ### Step 2: Install Dependencies & Run Locally
 ```bash
@@ -76,9 +73,9 @@ The repository is configured for zero-config Vercel deployment with root and fro
    - **Build Command:** `npm run build`
    - **Output Directory:** `frontend/dist` (or `dist` if root directory is set to `frontend`)
 4. Add the following **Environment Variables**:
-   - `VITE_CASCADIA_CONTRACT_ADDRESS`: `0x037d35F587555cAdE69840e19a1e1b58C65e4f7f`
+   - `VITE_CASCADIA_CONTRACT_ADDRESS`: `0xF88B847a8003Dc16d6dEbFedB2695Aff20801ea8`
    - `VITE_GENLAYER_CHAIN_ID`: `61999`
-   - `VITE_GENLAYER_RPC_URL`: `https://studio-dev.genlayer.com/api`
+   - `VITE_GENLAYER_RPC_URL`: `https://studio.genlayer.com/api`
 5. Click **Deploy**.
 
 #### Option B: Via Vercel CLI

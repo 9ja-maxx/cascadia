@@ -13,7 +13,7 @@ const { createClient, createAccount } = require("genlayer-js");
 const { studionet } = require("genlayer-js/chains");
 
 const CONTRACT_ADDRESS =
-  process.env.CONTRACT_ADDRESS || "0x037d35F587555cAdE69840e19a1e1b58C65e4f7f";
+  process.env.CONTRACT_ADDRESS || "0xF88B847a8003Dc16d6dEbFedB2695Aff20801ea8";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
 if (!PRIVATE_KEY) {

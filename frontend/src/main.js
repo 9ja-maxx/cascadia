@@ -4,7 +4,7 @@
  * Zero Mock Data • Zero Simulated Fallbacks
  */
 
-import { createClient, isSuccessful } from "genlayer-js";
+import { createClient } from "genlayer-js";
 import { studionet } from "genlayer-js/chains";
 import {
   calculateNodePositions,
@@ -13,9 +13,19 @@ import {
   computeTopologyStats
 } from "./topology.js";
 
-// Configurable deployment parameters wired to deployed contract
+// Clean up any stale local overrides so client always binds to canonical contract
+try {
+  localStorage.removeItem("cascadia_contract");
+} catch {
+  // Ignore localStorage exceptions in restricted environments
+}
+
+// Canonical Verified On-Chain Intelligent Contract on GenLayer Studio Net (Chain ID 61999)
+export const CANONICAL_CONTRACT_ADDRESS = "0xF88B847a8003Dc16d6dEbFedB2695Aff20801ea8";
+export const DEPLOYMENT_TX_HASH = "0xf3808966f3b473761d6270bbe0935d4bcf1bd2d404c378eb60f18d1df4d00f87";
+
 const CONFIG = {
-  contractAddress: localStorage.getItem("cascadia_contract") || "0x037d35F587555cAdE69840e19a1e1b58C65e4f7f",
+  contractAddress: CANONICAL_CONTRACT_ADDRESS,
   networkName: "GenLayer Studio Net",
   chainId: 61999,
   rpcUrl: "https://studio.genlayer.com/api"
@@ -31,8 +41,9 @@ const LIVE_ONCHAIN_SEED_IDS = [
   "verdict-treasury-wire-auth"
 ];
 
-// Verified On-Chain Genesis State deployed on GenLayer Studio Net (Contract: 0x037d35F587555cAdE69840e19a1e1b58C65e4f7f)
-// Pre-seeded to provide instantaneous telemetry rendering prior to live RPC synchronization
+// Verified On-Chain Genesis State deployed on GenLayer Studio Net (Contract: 0xF88B847a8003Dc16d6dEbFedB2695Aff20801ea8)
+// Pre-seeded to provide initial schema structure prior to live RPC verification.
+// Seeded state is prominently flagged with "REFERENCE PREVIEW" until live RPC confirmation.
 const VERIFIED_ONCHAIN_NODES = [
   {
     id: "anchor-iana-domains",
@@ -40,14 +51,17 @@ const VERIFIED_ONCHAIN_NODES = [
     title: "anchor-iana-domains",
     hypothesis: "IANA maintains example domains such as example.com and example.org for documentation purposes.",
     uri: "https://www.iana.org/help/example-domains",
-    status: "ANCHOR_GENESIS",
-    epoch: 0,
+    status: "ANCHOR_ACTIVE",
+    epoch: 1,
     depth: 0,
     custodian: "0x4d6d430b92c6252b21278eb7a71eb61e4cc50f74",
-    content_digest: "",
-    semantic_snapshot: null,
+    content_digest: "6df12620d6e1c1029a1534fc0b2e0eba7107db6daba73f6ae8e52f32386c340a",
+    semantic_snapshot: {
+      mutation: "NO_MUTATION",
+      rationale: "The observed content explicitly states that domains such as example.com and example.org are maintained for documentation purposes as described in RFC 2606 and RFC 6761. This directly affirms the hypothesis without any divergence from the baseline expectations."
+    },
     definition_fingerprint: "adae42ae0034fedc6716c032d126c0d52ea82a8d82589b3217fa498891f2d30b",
-    epoch_fingerprint: "7382f1cee3dba0363e59d0aa9986567ca5949a451eff7fb7e09e4ecd8e51f5f5"
+    epoch_fingerprint: "243269741919364186365ca01d88882586a4fdc8e3ca6895c8073b645abd06c3"
   },
   {
     id: "anchor-w3c-standards",
@@ -85,14 +99,18 @@ const VERIFIED_ONCHAIN_NODES = [
     title: "verdict-procurement-tier1",
     inquiry: "Is enterprise procurement authorized based on verified upstream compliance status?",
     dependencies: ["anchor-iana-domains"],
-    status: "VERDICT_INITIAL_STALE",
-    effective_status: "VERDICT_INITIAL_STALE",
-    epoch: 0,
+    status: "VERDICT_INDETERMINATE",
+    effective_status: "VERDICT_INDETERMINATE",
+    epoch: 1,
     depth: 1,
     curator: "0x4d6d430b92c6252b21278eb7a71eb61e4cc50f74",
-    adjudication: null,
+    adjudication: {
+      affected_dependency_ids: ["anchor-iana-domains"],
+      outcome: "VERDICT_UNRESOLVED",
+      rationale: "The active dependency 'anchor-iana-domains' only affirms that IANA maintains example domains for documentation purposes. It provides no facts about enterprise procurement, upstream compliance, or authorization status, leaving the primary inquiry indeterminable."
+    },
     definition_fingerprint: "1c3df17b1a3fed2b71bd1a6789e00bbb6ff76b01b2efbde79af2327bbc044650",
-    epoch_fingerprint: "cf3632bbe863623137a9e8d2320687c15d101c55e6e3e715c0de5e192604591a"
+    epoch_fingerprint: "6e5b1745bbacb59fc585d09b0ed535988d018257dc26f8889026c863c773e11b"
   },
   {
     id: "verdict-vendor-qualification",
@@ -107,7 +125,7 @@ const VERIFIED_ONCHAIN_NODES = [
     curator: "0x4d6d430b92c6252b21278eb7a71eb61e4cc50f74",
     adjudication: null,
     definition_fingerprint: "3170c1ab024a694a00c7ebe8c4365dcd64a5494d99fa03835474087b0cff9f9b",
-    epoch_fingerprint: "d23ac6a5c24733ae6a1e2385f10e338e9004b38144844e9249312d85e0e4e30d"
+    epoch_fingerprint: "44b93582fbe8e2d94c64945ebfcd33086355c01a813dab84fcc23edfeb4e62a0"
   },
   {
     id: "verdict-treasury-wire-auth",
@@ -130,6 +148,8 @@ const readClient = createClient({ chain: studionet });
 let writeClient = null;
 let userWallet = "";
 let isSyncing = false;
+let isLiveStateSynced = false;
+let rpcErrorMessage = null;
 let activeModal = null; // null | "anchor" | "verdict" | "settings" | "wallet-help"
 let currentFilter = "all"; // "all" | "anchors" | "verdicts"
 let effectiveStatusResult = null;
@@ -188,11 +208,11 @@ function showToast(message, type = "info") {
     toast.style.transform = "translateY(-8px) scale(0.96)";
     toast.style.transition = "all 0.3s ease";
     setTimeout(() => toast.remove(), 300);
-  }, 4500);
+  }, 5000);
 }
 
 // -----------------------------------------------------------------------------
-// Core On-Chain Contract Communication
+// Core On-Chain Contract Communication (Canonical Address Locked)
 // -----------------------------------------------------------------------------
 
 async function executeRead(method, args = []) {
@@ -209,10 +229,15 @@ async function executeRead(method, args = []) {
     return typeof raw === "string" ? JSON.parse(raw) : raw;
   } catch (err) {
     console.warn(`Read warning on ${method}:`, err?.message || err);
-    return null;
+    throw err;
   }
 }
 
+/**
+ * Executes a state-mutating transaction to the canonical contract address.
+ * Explicitly verifies the finalized receipt and leader execution result,
+ * preventing unconfirmed or reverted transactions from appearing as successful writes.
+ */
 async function executeWrite(method, args) {
   if (!writeClient) {
     await connectWallet();
@@ -230,19 +255,40 @@ async function executeWrite(method, args) {
     value: BigInt(0)
   });
 
-  showToast(`Transaction broadcast (${txHash.slice(0, 10)}…). Waiting for validator consensus...`, "warning");
+  showToast(`Transaction broadcast (${txHash.slice(0, 10)}…). Awaiting multi-validator consensus...`, "warning");
 
-  const receipt = await readClient.waitForTransactionReceipt({
-    hash: txHash,
-    waitUntil: "decided",
-    fullTransaction: true
-  });
-
-  if (!isSuccessful(receipt)) {
-    throw new Error(`Transaction reverted: ${receipt?.statusName || "CONSENSUS_REVERTED"}`);
+  // Wait for finalized/decided receipt with polling
+  let receipt = null;
+  const maxPolls = 60;
+  for (let i = 0; i < maxPolls; i++) {
+    try {
+      const tx = await readClient.getTransaction({ hash: txHash });
+      const statusNum = Number(tx?.status);
+      if (tx && (statusNum === 7 || tx.statusName === "FINALIZED" || (statusNum === 5 && tx.result_name === "MAJORITY_AGREE"))) {
+        receipt = tx;
+        break;
+      }
+    } catch {
+      // Continue polling
+    }
+    await new Promise((r) => setTimeout(r, 2000));
   }
 
-  showToast(`Transaction confirmed on-chain!`, "success");
+  if (!receipt) {
+    throw new Error(`Transaction confirmation timed out. Check explorer for hash: ${txHash}`);
+  }
+
+  const leaderReceipt = receipt.consensus_data?.leader_receipt?.[0];
+  const execResult = leaderReceipt?.execution_result || receipt.result_name || "UNKNOWN";
+  const resultStatus = leaderReceipt?.result?.status || "";
+  const isOk = execResult === "SUCCESS" || (receipt.result_name === "MAJORITY_AGREE" && execResult !== "ERROR" && resultStatus !== "contract_error" && resultStatus !== "rollback");
+
+  if (!isOk || execResult === "ERROR" || resultStatus === "contract_error" || resultStatus === "rollback") {
+    const rawError = leaderReceipt?.genvm_result?.raw_error || resultStatus || "REVERTED";
+    throw new Error(`Transaction reverted on-chain: Execution failed with ${execResult} (${typeof rawError === "object" ? JSON.stringify(rawError) : rawError}). State was not modified.`);
+  }
+
+  showToast(`Transaction confirmed & finalized on-chain! (${method})`, "success");
   await refreshOnChainState();
   return txHash;
 }
@@ -292,103 +338,71 @@ async function refreshOnChainState() {
     }
   }
 
-  // Load all known nodes concurrently with targeted routing
-  const promises = Array.from(knownIds).map(async (id) => {
-    if (id.startsWith("anchor")) {
-      try {
-        const a = await executeRead("get_anchor", [id]);
-        if (a && a.anchor_id) {
-          return {
-            id: a.anchor_id,
-            kind: "ANCHOR",
-            title: a.anchor_id,
-            hypothesis: a.tracked_hypothesis,
-            uri: a.uri,
-            status: a.status,
-            epoch: a.epoch,
-            depth: 0,
-            custodian: a.custodian,
-            content_digest: a.content_digest,
-            semantic_snapshot: a.semantic_snapshot,
-            definition_fingerprint: a.definition_fingerprint,
-            epoch_fingerprint: a.epoch_fingerprint
-          };
+  try {
+    const promises = Array.from(knownIds).map(async (id) => {
+      if (id.startsWith("anchor")) {
+        try {
+          const a = await executeRead("get_anchor", [id]);
+          if (a && a.anchor_id) {
+            return {
+              id: a.anchor_id,
+              kind: "ANCHOR",
+              title: a.anchor_id,
+              hypothesis: a.tracked_hypothesis,
+              uri: a.uri,
+              status: a.status,
+              epoch: a.epoch,
+              depth: 0,
+              custodian: a.custodian,
+              content_digest: a.content_digest,
+              semantic_snapshot: a.semantic_snapshot,
+              definition_fingerprint: a.definition_fingerprint,
+              epoch_fingerprint: a.epoch_fingerprint
+            };
+          }
+        } catch (e) {
+          console.warn(`Anchor read failed for ${id}:`, e);
         }
-      } catch (e) {
-        console.warn(`Anchor read failed for ${id}:`, e);
+      } else if (id.startsWith("verdict")) {
+        try {
+          const v = await executeRead("get_verdict", [id]);
+          if (v && v.verdict_id) {
+            return {
+              id: v.verdict_id,
+              kind: "VERDICT",
+              title: v.verdict_id,
+              inquiry: v.inquiry,
+              dependencies: v.dependencies || [],
+              status: v.status,
+              effective_status: v.effective_status,
+              epoch: v.epoch,
+              depth: v.topology_depth || 1,
+              curator: v.curator,
+              adjudication: v.adjudication,
+              definition_fingerprint: v.definition_fingerprint,
+              epoch_fingerprint: v.epoch_fingerprint
+            };
+          }
+        } catch (e) {
+          console.warn(`Verdict read failed for ${id}:`, e);
+        }
       }
-    } else if (id.startsWith("verdict")) {
-      try {
-        const v = await executeRead("get_verdict", [id]);
-        if (v && v.verdict_id) {
-          return {
-            id: v.verdict_id,
-            kind: "VERDICT",
-            title: v.verdict_id,
-            inquiry: v.inquiry,
-            dependencies: v.dependencies || [],
-            status: v.status,
-            effective_status: v.effective_status,
-            epoch: v.epoch,
-            depth: v.topology_depth || 1,
-            curator: v.curator,
-            adjudication: v.adjudication,
-            definition_fingerprint: v.definition_fingerprint,
-            epoch_fingerprint: v.epoch_fingerprint
-          };
-        }
-      } catch (e) {
-        console.warn(`Verdict read failed for ${id}:`, e);
-      }
-    } else {
-      try {
-        const a = await executeRead("get_anchor", [id]);
-        if (a && a.anchor_id) {
-          return {
-            id: a.anchor_id,
-            kind: "ANCHOR",
-            title: a.anchor_id,
-            hypothesis: a.tracked_hypothesis,
-            uri: a.uri,
-            status: a.status,
-            epoch: a.epoch,
-            depth: 0,
-            custodian: a.custodian,
-            content_digest: a.content_digest,
-            semantic_snapshot: a.semantic_snapshot,
-            definition_fingerprint: a.definition_fingerprint,
-            epoch_fingerprint: a.epoch_fingerprint
-          };
-        }
-      } catch {}
-      try {
-        const v = await executeRead("get_verdict", [id]);
-        if (v && v.verdict_id) {
-          return {
-            id: v.verdict_id,
-            kind: "VERDICT",
-            title: v.verdict_id,
-            inquiry: v.inquiry,
-            dependencies: v.dependencies || [],
-            status: v.status,
-            effective_status: v.effective_status,
-            epoch: v.epoch,
-            depth: v.topology_depth || 1,
-            curator: v.curator,
-            adjudication: v.adjudication,
-            definition_fingerprint: v.definition_fingerprint,
-            epoch_fingerprint: v.epoch_fingerprint
-          };
-        }
-      } catch {}
-    }
-    return null;
-  });
+      return null;
+    });
 
-  const resolved = (await Promise.all(promises)).filter(Boolean);
-  if (resolved.length > 0) {
-    topologyNodes = resolved;
-    topologyEdges = buildGraphEdges(topologyNodes);
+    const resolved = (await Promise.all(promises)).filter(Boolean);
+    if (resolved.length > 0) {
+      topologyNodes = resolved;
+      topologyEdges = buildGraphEdges(topologyNodes);
+      isLiveStateSynced = true;
+      rpcErrorMessage = null;
+    } else {
+      isLiveStateSynced = false;
+      rpcErrorMessage = "No nodes returned from contract. Displaying reference preview snapshot.";
+    }
+  } catch (err) {
+    isLiveStateSynced = false;
+    rpcErrorMessage = err?.message || "Failed to reach GenLayer Studio Net RPC";
   }
 
   if (topologyNodes.length > 0 && (!selectedNodeId || !topologyNodes.some((n) => n.id === selectedNodeId))) {
@@ -447,6 +461,17 @@ function renderApp() {
       </div>
     </header>
 
+    ${rpcErrorMessage ? `
+      <!-- Prominent Fallback Labeling Warning -->
+      <div style="background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.35); border-radius: 8px; padding: 12px 18px; margin: 1rem 2rem 0; display: flex; align-items: center; gap: 12px; color: #fca5a5; font-size: 0.85rem;">
+        <span style="font-size: 1.25rem; color: #ef4444;">⚠</span>
+        <div>
+          <strong style="color: #f87171;">RPC READ WARNING:</strong> Live state synchronization failed (${rpcErrorMessage}). 
+          Displaying offline reference snapshot. <em>Failed RPC reads cannot and do not appear as live contract state.</em>
+        </div>
+      </div>
+    ` : ""}
+
     <!-- Executive Overview Strip -->
     <section class="dashboard-header">
       <div class="dashboard-title-row">
@@ -485,14 +510,16 @@ function renderApp() {
     <main class="topology-container">
       <!-- Live Contract Status Bar (Zero Mock Data) -->
       <div class="live-contract-bar">
-        <div class="contract-info">
-          <span class="live-badge">LIVE ON-CHAIN</span>
-          <span class="contract-address">Contract: <code>${CONFIG.contractAddress}</code></span>
-          ${isSyncing ? `<span style="color: var(--cyan-bright); font-size: 0.8rem;">⟳ Syncing blockchain state...</span>` : ""}
+        <div class="contract-info" style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+          <span style="${isLiveStateSynced ? 'background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3);' : 'background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3);'} padding: 4px 10px; border-radius: 4px; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.05em;">
+            ${isLiveStateSynced ? "● LIVE ON-CHAIN CONSENSUS VERIFIED" : "⚡ REFERENCE PREVIEW (PENDING LIVE SYNC)"}
+          </span>
+          <span class="contract-address">Canonical Contract: <code>${CONFIG.contractAddress}</code></span>
+          ${isSyncing ? `<span style="color: var(--cyan-bright); font-size: 0.8rem; margin-left: 8px;">⟳ Syncing with GenLayer validators...</span>` : ""}
         </div>
         <div class="contract-actions">
           <button class="btn btn-secondary btn-sm" id="btn-refresh-chain" type="button">⟳ Refresh State</button>
-          <button class="btn btn-secondary btn-sm" id="btn-config-contract" type="button">Settings</button>
+          <button class="btn btn-secondary btn-sm" id="btn-config-contract" type="button">Contract Info</button>
         </div>
       </div>
 
@@ -501,7 +528,7 @@ function renderApp() {
           <div class="canvas-legend">
             <div class="legend-item"><span class="legend-swatch cyan"></span> Genesis / Pending</div>
             <div class="legend-item"><span class="legend-swatch emerald"></span> Active / Valid</div>
-            <div class="legend-item"><span class="legend-swatch amber"></span> Mutated / Stale</div>
+            <div class="legend-item"><span class="legend-swatch amber"></span> Mutated / Stale / Indeterminate</div>
           </div>
           ${currentFilter !== "all" ? `
             <button class="btn btn-secondary btn-sm" data-nav-view="all" type="button">Show All Nodes</button>
@@ -526,7 +553,7 @@ function renderApp() {
     ${renderModals()}
 
     <footer class="footer">
-      <span>CASCADIA PROTOCOL • DEPLOYED AT ${CONFIG.contractAddress} • GENLAYER STUDIO NET (CHAIN ID 61999)</span>
+      <span>CASCADIA PROTOCOL • CANONICAL CONTRACT: <code>${CONFIG.contractAddress}</code> • GENLAYER STUDIO NET (CHAIN ID 61999)</span>
     </footer>
   `;
 }
@@ -556,7 +583,7 @@ function renderTopologySVG(nodes, edges) {
 
     const pathD = generateBezierPath(start.x + 130, start.y, end.x - 130, end.y);
     const parentNode = nodes.find((n) => n.id === parent);
-    const isStale = parentNode?.status?.includes("MUTATED") || parentNode?.status?.includes("STALE");
+    const isStale = parentNode?.status?.includes("MUTATED") || parentNode?.status?.includes("STALE") || parentNode?.status?.includes("INDETERMINATE");
 
     return `<path class="dag-edge ${isStale ? 'stale' : 'active'}" d="${pathD}" />`;
   }).join("");
@@ -584,6 +611,7 @@ function renderTopologyNodeCards(nodes) {
         <div class="node-footer">
           <span>Epoch: ${node.epoch ?? 0}</span>
           <span>Depth: ${node.depth ?? 0}</span>
+          <span style="font-size: 0.65rem; color: ${isLiveStateSynced ? '#10b981' : '#f59e0b'};">${isLiveStateSynced ? '● LIVE' : '⚡ PREVIEW'}</span>
         </div>
       </div>
     `;
@@ -623,9 +651,12 @@ function renderTelemetryDrawer(node) {
 
       <div class="detail-block">
         <div class="detail-label">ON-CHAIN STATUS</div>
-        <div class="detail-value">
+        <div class="detail-value" style="display: flex; align-items: center; gap: 8px;">
           <span class="status-pill ${node.status?.toLowerCase().replace("anchor_", "").replace("verdict_", "")}">
             ${node.status}
+          </span>
+          <span style="font-size: 0.7rem; color: ${isLiveStateSynced ? '#10b981' : '#f59e0b'}; font-weight: 600;">
+            ${isLiveStateSynced ? '● CONFIRMED ON-CHAIN' : '⚡ REFERENCE PREVIEW'}
           </span>
         </div>
       </div>
@@ -677,6 +708,13 @@ function renderTelemetryDrawer(node) {
         </div>
       </div>
 
+      <div class="detail-block">
+        <div class="detail-label">EPOCH FINGERPRINT</div>
+        <div class="detail-value" style="font-family: var(--font-mono); font-size: 0.75rem; word-break: break-all;">
+          ${node.epoch_fingerprint || "—"}
+        </div>
+      </div>
+
       ${effectiveStatusResult ? `
         <div class="detail-block" style="background: rgba(0,240,255,0.06); padding: 0.75rem; border-radius: 6px;">
           <div class="detail-label">ON-CHAIN VERIFICATION RESULT</div>
@@ -706,35 +744,31 @@ function renderTelemetryDrawer(node) {
 }
 
 function renderModals() {
-  if (!activeModal) return "";
-
   if (activeModal === "anchor") {
     return `
       <div class="modal-backdrop open" id="modal-backdrop">
         <div class="modal-dialog">
           <div class="modal-header">
-            <div class="modal-title">Anchor Empirical Ground Truth</div>
+            <div class="modal-title">Register Empirical Truth Anchor</div>
             <button class="modal-close" id="btn-modal-close" type="button" title="Close">✕</button>
           </div>
-          <form id="form-create-anchor" class="modal-body">
+          <form class="modal-body" id="form-create-anchor">
             <div class="form-group">
-              <div class="form-label-row">
-                <label class="form-label" for="inp-anchor-id">Anchor Identifier</label>
-                <button type="button" class="btn-quick-fill" id="btn-quick-fill-iana">Quick Fill: IANA Domains</button>
-              </div>
-              <input type="text" class="form-input" id="inp-anchor-id" placeholder="e.g. anchor-compliance-iso" required />
+              <label class="form-label" for="inp-anchor-id">Unique Anchor Identifier</label>
+              <input type="text" class="form-input" id="inp-anchor-id" placeholder="e.g. anchor-corp-sec-filing" required />
             </div>
             <div class="form-group">
-              <label class="form-label" for="inp-anchor-uri">Observed Web Endpoint (HTTPS)</label>
-              <input type="url" class="form-input" id="inp-anchor-uri" placeholder="https://registry.example.org/cert.json" required />
+              <label class="form-label" for="inp-anchor-uri">Public HTTPS Resource URL</label>
+              <input type="url" class="form-input" id="inp-anchor-uri" placeholder="https://example.com/status.json" required />
             </div>
             <div class="form-group">
               <label class="form-label" for="inp-anchor-hypothesis">Tracked Empirical Hypothesis</label>
-              <textarea class="form-textarea" id="inp-anchor-hypothesis" rows="3" placeholder="State the exact factual claim that validators must continuously verify against the URL..." required></textarea>
+              <textarea class="form-textarea" id="inp-anchor-hypothesis" placeholder="State the ground truth fact this anchor asserts against the web endpoint..." required></textarea>
             </div>
             <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" id="btn-quick-fill-iana">Quick Sample (IANA)</button>
               <button type="button" class="btn btn-secondary" id="btn-modal-cancel">Cancel</button>
-              <button type="submit" class="btn btn-primary">Register Anchor On-Chain</button>
+              <button type="submit" class="btn btn-primary">Deploy to Blockchain</button>
             </div>
           </form>
         </div>
@@ -743,44 +777,39 @@ function renderModals() {
   }
 
   if (activeModal === "verdict") {
+    const availableDeps = topologyNodes.map((n) => `
+      <label class="dep-checkbox-label">
+        <input type="checkbox" name="deps" value="${n.id}" />
+        <span><strong>${n.id}</strong> (${n.kind} • ${n.status})</span>
+      </label>
+    `).join("");
+
     return `
       <div class="modal-backdrop open" id="modal-backdrop">
         <div class="modal-dialog">
           <div class="modal-header">
-            <div class="modal-title">Establish Causal Verdict</div>
+            <div class="modal-title">Formulate Causal Verdict Node</div>
             <button class="modal-close" id="btn-modal-close" type="button" title="Close">✕</button>
           </div>
-          <form id="form-create-verdict" class="modal-body">
+          <form class="modal-body" id="form-create-verdict">
             <div class="form-group">
-              <div class="form-label-row">
-                <label class="form-label" for="inp-verdict-id">Verdict Identifier</label>
-                <button type="button" class="btn-quick-fill" id="btn-quick-fill-verdict">Quick Fill: Procurement</button>
-              </div>
-              <input type="text" class="form-input" id="inp-verdict-id" placeholder="e.g. verdict-credit-facility" required />
+              <label class="form-label" for="inp-verdict-id">Verdict Identifier</label>
+              <input type="text" class="form-input" id="inp-verdict-id" placeholder="e.g. verdict-vendor-compliance" required />
             </div>
             <div class="form-group">
-              <label class="form-label" for="inp-verdict-inquiry">Reasoned Inquiry</label>
-              <textarea class="form-textarea" id="inp-verdict-inquiry" rows="3" placeholder="Specify the decision question to be evaluated by consensus validators..." required></textarea>
+              <label class="form-label" for="inp-verdict-inquiry">Reasoned Inquiry for Consensus Committee</label>
+              <textarea class="form-textarea" id="inp-verdict-inquiry" placeholder="What specific condition must be satisfied by upstream dependencies?" required></textarea>
             </div>
             <div class="form-group">
-              <label class="form-label">Upstream Dependencies (Select 1 or more)</label>
-              <div class="dep-selector">
-                ${topologyNodes.length === 0 ? `
-                  <div class="dep-empty-hint">
-                    <p>No upstream nodes registered yet.</p>
-                    <button type="button" class="btn btn-secondary btn-sm" id="btn-switch-to-anchor" style="margin-top: 0.5rem;">+ Register Anchor First</button>
-                  </div>
-                ` : topologyNodes.map((n) => `
-                  <label class="dep-checkbox-label">
-                    <input type="checkbox" name="deps" value="${n.id}" />
-                    <span><strong>${n.id}</strong> (${n.kind})</span>
-                  </label>
-                `).join("")}
+              <label class="form-label">Upstream Dependencies (Select At Least One)</label>
+              <div class="dep-checklist">
+                ${availableDeps || `<p style="color: var(--text-muted); font-size: 0.8rem;">No existing nodes available. <button type="button" class="btn btn-secondary btn-sm" id="btn-switch-to-anchor">Register Anchor First</button></p>`}
               </div>
             </div>
             <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" id="btn-quick-fill-verdict">Quick Sample</button>
               <button type="button" class="btn btn-secondary" id="btn-modal-cancel">Cancel</button>
-              <button type="submit" class="btn btn-primary">Establish Verdict On-Chain</button>
+              <button type="submit" class="btn btn-primary">Establish On-Chain</button>
             </div>
           </form>
         </div>
@@ -793,25 +822,40 @@ function renderModals() {
       <div class="modal-backdrop open" id="modal-backdrop">
         <div class="modal-dialog">
           <div class="modal-header">
-            <div class="modal-title">Protocol Contract & Network Settings</div>
+            <div class="modal-title">Verified Intelligent Contract Configuration</div>
             <button class="modal-close" id="btn-modal-close" type="button" title="Close">✕</button>
           </div>
-          <form id="form-settings" class="modal-body">
+          <form class="modal-body" id="form-settings">
+            <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 8px; padding: 12px; margin-bottom: 1.25rem;">
+              <div style="display: flex; align-items: center; gap: 8px; font-weight: 700; color: #10b981; font-size: 0.8rem; letter-spacing: 0.05em;">
+                <span>●</span> SOURCE-MATCHED CANONICAL INTELLIGENT CONTRACT
+              </div>
+              <div style="color: var(--text-secondary); font-size: 0.78rem; margin-top: 4px; line-height: 1.4;">
+                Cascadia routes all write operations (register_anchor, audit_anchor, establish_verdict, adjudicate_verdict) to this verified contract deployment on GenLayer Studio Net. Stale localStorage overrides have been purged.
+              </div>
+            </div>
             <div class="form-group">
-              <label class="form-label" for="inp-settings-contract">Intelligent Contract Address</label>
-              <input type="text" class="form-input" id="inp-settings-contract" value="${CONFIG.contractAddress}" required />
+              <label class="form-label" for="inp-settings-contract">Verified Canonical Contract Address</label>
+              <div style="display: flex; gap: 8px;">
+                <input type="text" class="form-input" id="inp-settings-contract" value="${CONFIG.contractAddress}" readonly style="font-family: monospace; background: rgba(0,0,0,0.3); color: var(--cyan-bright);" />
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-copy-contract" title="Copy Address">Copy</button>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Deployment Transaction Hash</label>
+              <input type="text" class="form-input" value="${DEPLOYMENT_TX_HASH}" readonly style="font-family: monospace; font-size: 0.75rem; background: rgba(0,0,0,0.3);" />
             </div>
             <div class="form-group">
               <label class="form-label">Network RPC</label>
-              <input type="text" class="form-input" value="${CONFIG.rpcUrl}" disabled />
+              <input type="text" class="form-input" value="${CONFIG.rpcUrl} (Chain ID ${CONFIG.chainId})" readonly />
             </div>
             <div class="form-group">
               <label class="form-label">Active Signer Account</label>
-              <input type="text" class="form-input" value="${userWallet || "Not Connected (EIP-1193)"}" disabled />
+              <input type="text" class="form-input" value="${userWallet || "Not Connected (EIP-1193)"}" readonly />
             </div>
-            <div class="modal-footer">
-              <button type="button" class="btn btn-secondary" id="btn-modal-cancel">Cancel</button>
-              <button type="submit" class="btn btn-primary">Save Settings</button>
+            <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-clear-cache">Reset Local Node Cache</button>
+              <button type="button" class="btn btn-primary" id="btn-modal-cancel">Close</button>
             </div>
           </form>
         </div>
@@ -892,6 +936,24 @@ function setupEventDelegation() {
       return;
     }
 
+    // Copy contract address in Settings
+    if (e.target.closest("#btn-copy-contract")) {
+      navigator.clipboard.writeText(CONFIG.contractAddress).then(() => {
+        showToast("Canonical contract address copied to clipboard!", "success");
+      });
+      return;
+    }
+
+    // Clear local node cache in Settings
+    if (e.target.closest("#btn-clear-cache")) {
+      try {
+        localStorage.removeItem(`cascadia_nodes_${CONFIG.contractAddress}`);
+        showToast("Local node cache reset. Re-syncing on-chain state...", "info");
+        refreshOnChainState().catch(console.error);
+      } catch {}
+      return;
+    }
+
     // Modal Close & Cancel
     if (e.target.closest("#btn-modal-close, #btn-modal-cancel")) {
       activeModal = null;
@@ -960,7 +1022,7 @@ function setupEventDelegation() {
       return;
     }
 
-    // Action: Audit Anchor On-Chain
+    // Action: Audit Anchor On-Chain (audit_anchor)
     if (e.target.closest("#btn-audit-anchor")) {
       if (!selectedNodeId) return;
       executeWrite("audit_anchor", [selectedNodeId]).catch((err) => {
@@ -969,7 +1031,7 @@ function setupEventDelegation() {
       return;
     }
 
-    // Action: Adjudicate Verdict On-Chain
+    // Action: Adjudicate Verdict On-Chain (adjudicate_verdict)
     if (e.target.closest("#btn-adjudicate-verdict")) {
       if (!selectedNodeId) return;
       executeWrite("adjudicate_verdict", [selectedNodeId]).catch((err) => {
@@ -978,10 +1040,10 @@ function setupEventDelegation() {
       return;
     }
 
-    // Action: Verify Effective Status (Zero-Gas Read)
+    // Action: Verify Effective Status (Zero-Gas Recursive Read evaluate_effective_verdict)
     if (e.target.closest("#btn-verify-effective")) {
       if (!selectedNodeId) return;
-      showToast("Querying recursive status on-chain...", "info");
+      showToast("Querying recursive DAG status on-chain...", "info");
       executeRead("evaluate_effective_verdict", [selectedNodeId])
         .then((res) => {
           effectiveStatusResult = res || "VERDICT_VALID";
@@ -997,7 +1059,7 @@ function setupEventDelegation() {
 
   // Submit Events (Forms)
   document.addEventListener("submit", async (e) => {
-    // Create Anchor Form
+    // Create Anchor Form (register_anchor)
     if (e.target.id === "form-create-anchor") {
       e.preventDefault();
       const id = document.getElementById("inp-anchor-id")?.value.trim();
@@ -1020,7 +1082,7 @@ function setupEventDelegation() {
       return;
     }
 
-    // Create Verdict Form
+    // Create Verdict Form (establish_verdict)
     if (e.target.id === "form-create-verdict") {
       e.preventDefault();
       const id = document.getElementById("inp-verdict-id")?.value.trim();
@@ -1046,20 +1108,6 @@ function setupEventDelegation() {
       } catch (err) {
         showToast(`Verdict establishment failed: ${err.message}`, "error");
       }
-      return;
-    }
-
-    // Settings Form
-    if (e.target.id === "form-settings") {
-      e.preventDefault();
-      const newAddress = document.getElementById("inp-settings-contract")?.value.trim();
-      if (newAddress) {
-        CONFIG.contractAddress = newAddress;
-        localStorage.setItem("cascadia_contract", newAddress);
-      }
-      activeModal = null;
-      showToast("Contract configuration updated.", "success");
-      refreshOnChainState().catch(console.error);
       return;
     }
   });
